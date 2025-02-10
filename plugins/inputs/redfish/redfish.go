@@ -4,12 +4,15 @@ package redfish
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/influxdata/telegraf"
@@ -21,13 +24,20 @@ import (
 //go:embed sample.conf
 var sampleConfig string
 
+const (
+	// tag sets used for including redfish OData link parent data
+	tagSetChassisLocation = "chassis.location"
+	tagSetChassis         = "chassis"
+)
+
 type Redfish struct {
 	Address          string          `toml:"address"`
-	Username         string          `toml:"username"`
-	Password         string          `toml:"password"`
+	Username         config.Secret   `toml:"username"`
+	Password         config.Secret   `toml:"password"`
 	ComputerSystemID string          `toml:"computer_system_id"`
 	IncludeMetrics   []string        `toml:"include_metrics"`
 	IncludeTagSets   []string        `toml:"include_tag_sets"`
+	Workarounds      []string        `toml:"workarounds"`
 	Timeout          config.Duration `toml:"timeout"`
 
 	tagSet map[string]bool
@@ -36,13 +46,7 @@ type Redfish struct {
 	baseURL *url.URL
 }
 
-const (
-	// tag sets used for including redfish OData link parent data
-	tagSetChassisLocation = "chassis.location"
-	tagSetChassis         = "chassis"
-)
-
-type System struct {
+type system struct {
 	Hostname string `json:"hostname"`
 	Links    struct {
 		Chassis []struct {
@@ -51,9 +55,9 @@ type System struct {
 	}
 }
 
-type Chassis struct {
+type chassis struct {
 	ChassisType  string
-	Location     *Location
+	Location     *location
 	Manufacturer string
 	Model        string
 	PartNumber   string
@@ -63,13 +67,13 @@ type Chassis struct {
 	PowerState   string
 	SKU          string
 	SerialNumber string
-	Status       Status
+	Status       status
 	Thermal      struct {
 		Ref string `json:"@odata.id"`
 	}
 }
 
-type Power struct {
+type power struct {
 	PowerControl []struct {
 		Name                string
 		MemberID            string
@@ -92,7 +96,7 @@ type Power struct {
 		PowerCapacityWatts   *float64
 		PowerOutputWatts     *float64
 		LastPowerOutputWatts *float64
-		Status               Status
+		Status               status
 		LineInputVoltage     *float64
 	}
 	Voltages []struct {
@@ -103,21 +107,23 @@ type Power struct {
 		UpperThresholdFatal    *float64
 		LowerThresholdCritical *float64
 		LowerThresholdFatal    *float64
-		Status                 Status
+		Status                 status
 	}
 }
 
-type Thermal struct {
+type thermal struct {
 	Fans []struct {
 		Name                   string
 		MemberID               string
+		FanName                string
+		CurrentReading         *int64
 		Reading                *int64
 		ReadingUnits           *string
 		UpperThresholdCritical *int64
 		UpperThresholdFatal    *int64
 		LowerThresholdCritical *int64
 		LowerThresholdFatal    *int64
-		Status                 Status
+		Status                 status
 	}
 	Temperatures []struct {
 		Name                   string
@@ -127,11 +133,11 @@ type Thermal struct {
 		UpperThresholdFatal    *float64
 		LowerThresholdCritical *float64
 		LowerThresholdFatal    *float64
-		Status                 Status
+		Status                 status
 	}
 }
 
-type Location struct {
+type location struct {
 	PostalAddress struct {
 		DataCenter string
 		Room       string
@@ -142,7 +148,7 @@ type Location struct {
 	}
 }
 
-type Status struct {
+type status struct {
 	State  string
 	Health string
 }
@@ -153,19 +159,19 @@ func (*Redfish) SampleConfig() string {
 
 func (r *Redfish) Init() error {
 	if r.Address == "" {
-		return fmt.Errorf("did not provide IP")
+		return errors.New("did not provide IP")
 	}
 
-	if r.Username == "" && r.Password == "" {
-		return fmt.Errorf("did not provide username and password")
+	if r.Username.Empty() && r.Password.Empty() {
+		return errors.New("did not provide username and password")
 	}
 
 	if r.ComputerSystemID == "" {
-		return fmt.Errorf("did not provide the computer system ID of the resource")
+		return errors.New("did not provide the computer system ID of the resource")
 	}
 
 	if len(r.IncludeMetrics) == 0 {
-		return fmt.Errorf("no metrics specified to collect")
+		return errors.New("no metrics specified to collect")
 	}
 	for _, metric := range r.IncludeMetrics {
 		switch metric {
@@ -175,6 +181,13 @@ func (r *Redfish) Init() error {
 		}
 	}
 
+	for _, workaround := range r.Workarounds {
+		switch workaround {
+		case "ilo4-thermal":
+		default:
+			return fmt.Errorf("unknown workaround requested: %s", workaround)
+		}
+	}
 	r.tagSet = make(map[string]bool, len(r.IncludeTagSets))
 	for _, setLabel := range r.IncludeTagSets {
 		r.tagSet[setLabel] = true
@@ -200,94 +213,6 @@ func (r *Redfish) Init() error {
 	}
 
 	return nil
-}
-
-func (r *Redfish) getData(address string, payload interface{}) error {
-	req, err := http.NewRequest("GET", address, nil)
-	if err != nil {
-		return err
-	}
-
-	req.SetBasicAuth(r.Username, r.Password)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("OData-Version", "4.0")
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("received status code %d (%s) for address %s, expected 200",
-			resp.StatusCode,
-			http.StatusText(resp.StatusCode),
-			r.Address)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(body, &payload)
-	if err != nil {
-		return fmt.Errorf("error parsing input: %w", err)
-	}
-
-	return nil
-}
-
-func (r *Redfish) getComputerSystem(id string) (*System, error) {
-	loc := r.baseURL.ResolveReference(&url.URL{Path: path.Join("/redfish/v1/Systems/", id)})
-	system := &System{}
-	err := r.getData(loc.String(), system)
-	if err != nil {
-		return nil, err
-	}
-	return system, nil
-}
-
-func (r *Redfish) getChassis(ref string) (*Chassis, error) {
-	loc := r.baseURL.ResolveReference(&url.URL{Path: ref})
-	chassis := &Chassis{}
-	err := r.getData(loc.String(), chassis)
-	if err != nil {
-		return nil, err
-	}
-	return chassis, nil
-}
-
-func (r *Redfish) getPower(ref string) (*Power, error) {
-	loc := r.baseURL.ResolveReference(&url.URL{Path: ref})
-	power := &Power{}
-	err := r.getData(loc.String(), power)
-	if err != nil {
-		return nil, err
-	}
-	return power, nil
-}
-
-func (r *Redfish) getThermal(ref string) (*Thermal, error) {
-	loc := r.baseURL.ResolveReference(&url.URL{Path: ref})
-	thermal := &Thermal{}
-	err := r.getData(loc.String(), thermal)
-	if err != nil {
-		return nil, err
-	}
-	return thermal, nil
-}
-
-func setChassisTags(chassis *Chassis, tags map[string]string) {
-	tags["chassis_chassistype"] = chassis.ChassisType
-	tags["chassis_manufacturer"] = chassis.Manufacturer
-	tags["chassis_model"] = chassis.Model
-	tags["chassis_partnumber"] = chassis.PartNumber
-	tags["chassis_powerstate"] = chassis.PowerState
-	tags["chassis_sku"] = chassis.SKU
-	tags["chassis_serialnumber"] = chassis.SerialNumber
-	tags["chassis_state"] = chassis.Status.State
-	tags["chassis_health"] = chassis.Status.Health
 }
 
 func (r *Redfish) Gather(acc telegraf.Accumulator) error {
@@ -325,14 +250,122 @@ func (r *Redfish) Gather(acc telegraf.Accumulator) error {
 	return nil
 }
 
-func (r *Redfish) gatherThermal(acc telegraf.Accumulator, address string, system *System, chassis *Chassis) error {
+func (r *Redfish) getData(address string, payload interface{}) error {
+	req, err := http.NewRequest("GET", address, nil)
+	if err != nil {
+		return err
+	}
+
+	username, err := r.Username.Get()
+	if err != nil {
+		return fmt.Errorf("getting username failed: %w", err)
+	}
+	user := username.String()
+	username.Destroy()
+
+	password, err := r.Password.Get()
+	if err != nil {
+		return fmt.Errorf("getting password failed: %w", err)
+	}
+	pass := password.String()
+	password.Destroy()
+
+	req.SetBasicAuth(user, pass)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("OData-Version", "4.0")
+
+	// workaround for iLO4 thermal data
+	if slices.Contains(r.Workarounds, "ilo4-thermal") && strings.Contains(address, "/Thermal") {
+		req.Header.Del("OData-Version")
+	}
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("received status code %d (%s) for address %s, expected 200",
+			resp.StatusCode,
+			http.StatusText(resp.StatusCode),
+			r.Address)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(body, &payload)
+	if err != nil {
+		return fmt.Errorf("error parsing input: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Redfish) getComputerSystem(id string) (*system, error) {
+	loc := r.baseURL.ResolveReference(&url.URL{Path: path.Join("/redfish/v1/Systems/", id)})
+	system := &system{}
+	err := r.getData(loc.String(), system)
+	if err != nil {
+		return nil, err
+	}
+	return system, nil
+}
+
+func (r *Redfish) getChassis(ref string) (*chassis, error) {
+	loc := r.baseURL.ResolveReference(&url.URL{Path: ref})
+	chassis := &chassis{}
+	err := r.getData(loc.String(), chassis)
+	if err != nil {
+		return nil, err
+	}
+	return chassis, nil
+}
+
+func (r *Redfish) getPower(ref string) (*power, error) {
+	loc := r.baseURL.ResolveReference(&url.URL{Path: ref})
+	power := &power{}
+	err := r.getData(loc.String(), power)
+	if err != nil {
+		return nil, err
+	}
+	return power, nil
+}
+
+func (r *Redfish) getThermal(ref string) (*thermal, error) {
+	loc := r.baseURL.ResolveReference(&url.URL{Path: ref})
+	thermal := &thermal{}
+	err := r.getData(loc.String(), thermal)
+	if err != nil {
+		return nil, err
+	}
+	return thermal, nil
+}
+
+func setChassisTags(chassis *chassis, tags map[string]string) {
+	tags["chassis_chassistype"] = chassis.ChassisType
+	tags["chassis_manufacturer"] = chassis.Manufacturer
+	tags["chassis_model"] = chassis.Model
+	tags["chassis_partnumber"] = chassis.PartNumber
+	tags["chassis_powerstate"] = chassis.PowerState
+	tags["chassis_sku"] = chassis.SKU
+	tags["chassis_serialnumber"] = chassis.SerialNumber
+	tags["chassis_state"] = chassis.Status.State
+	tags["chassis_health"] = chassis.Status.Health
+}
+
+func (r *Redfish) gatherThermal(acc telegraf.Accumulator, address string, system *system, chassis *chassis) error {
 	thermal, err := r.getThermal(chassis.Thermal.Ref)
 	if err != nil {
 		return err
 	}
 
 	for _, j := range thermal.Temperatures {
-		tags := map[string]string{}
+		tags := make(map[string]string, 19)
 		tags["member_id"] = j.MemberID
 		tags["address"] = address
 		tags["name"] = j.Name
@@ -359,11 +392,14 @@ func (r *Redfish) gatherThermal(acc telegraf.Accumulator, address string, system
 	}
 
 	for _, j := range thermal.Fans {
-		tags := map[string]string{}
-		fields := make(map[string]interface{})
+		tags := make(map[string]string, 20)
+		fields := make(map[string]interface{}, 5)
 		tags["member_id"] = j.MemberID
 		tags["address"] = address
 		tags["name"] = j.Name
+		if j.FanName != "" {
+			tags["name"] = j.FanName
+		}
 		tags["source"] = system.Hostname
 		tags["state"] = j.Status.State
 		tags["health"] = j.Status.Health
@@ -383,6 +419,8 @@ func (r *Redfish) gatherThermal(acc telegraf.Accumulator, address string, system
 			fields["lower_threshold_critical"] = j.LowerThresholdCritical
 			fields["lower_threshold_fatal"] = j.LowerThresholdFatal
 			fields["reading_rpm"] = j.Reading
+		} else if j.CurrentReading != nil {
+			fields["reading_percent"] = j.CurrentReading
 		} else {
 			fields["reading_percent"] = j.Reading
 		}
@@ -392,7 +430,7 @@ func (r *Redfish) gatherThermal(acc telegraf.Accumulator, address string, system
 	return nil
 }
 
-func (r *Redfish) gatherPower(acc telegraf.Accumulator, address string, system *System, chassis *Chassis) error {
+func (r *Redfish) gatherPower(acc telegraf.Accumulator, address string, system *system, chassis *chassis) error {
 	power, err := r.getPower(chassis.Power.Ref)
 	if err != nil {
 		return err
@@ -431,7 +469,7 @@ func (r *Redfish) gatherPower(acc telegraf.Accumulator, address string, system *
 	}
 
 	for _, j := range power.PowerSupplies {
-		tags := map[string]string{}
+		tags := make(map[string]string, 19)
 		tags["member_id"] = j.MemberID
 		tags["address"] = address
 		tags["name"] = j.Name
@@ -458,7 +496,7 @@ func (r *Redfish) gatherPower(acc telegraf.Accumulator, address string, system *
 	}
 
 	for _, j := range power.Voltages {
-		tags := map[string]string{}
+		tags := make(map[string]string, 19)
 		tags["member_id"] = j.MemberID
 		tags["address"] = address
 		tags["name"] = j.Name

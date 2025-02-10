@@ -83,7 +83,6 @@ func TestAgent_LoadOutput(t *testing.T) {
 	require.Len(t, a.Config.Outputs, 1)
 
 	c = config.NewConfig()
-	c.OutputFilters = []string{}
 	err = c.LoadConfig("../config/testdata/telegraf-agent.toml")
 	require.NoError(t, err)
 	a = NewAgent(c)
@@ -222,9 +221,7 @@ func TestCases(t *testing.T) {
 			// Process expected metrics and compare with resulting metrics
 			options := []cmp.Option{
 				testutil.IgnoreTags("host"),
-			}
-			if expected[0].Time().IsZero() {
-				options = append(options, testutil.IgnoreTime())
+				testutil.IgnoreTime(),
 			}
 			testutil.RequireMetricsEqual(t, expected, actual, options...)
 		})

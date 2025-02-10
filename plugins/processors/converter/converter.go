@@ -3,6 +3,7 @@ package converter
 
 import (
 	_ "embed"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -20,15 +21,16 @@ import (
 var sampleConfig string
 
 type Conversion struct {
-	Measurement     []string `toml:"measurement"`
-	Tag             []string `toml:"tag"`
-	String          []string `toml:"string"`
-	Integer         []string `toml:"integer"`
-	Unsigned        []string `toml:"unsigned"`
-	Boolean         []string `toml:"boolean"`
-	Float           []string `toml:"float"`
-	Timestamp       []string `toml:"timestamp"`
-	TimestampFormat string   `toml:"timestamp_format"`
+	Measurement       []string `toml:"measurement"`
+	Tag               []string `toml:"tag"`
+	String            []string `toml:"string"`
+	Integer           []string `toml:"integer"`
+	Unsigned          []string `toml:"unsigned"`
+	Boolean           []string `toml:"boolean"`
+	Float             []string `toml:"float"`
+	Timestamp         []string `toml:"timestamp"`
+	TimestampFormat   string   `toml:"timestamp_format"`
+	Base64IEEEFloat32 []string `toml:"base64_ieee_float32"`
 }
 
 type Converter struct {
@@ -41,14 +43,15 @@ type Converter struct {
 }
 
 type ConversionFilter struct {
-	Measurement filter.Filter
-	Tag         filter.Filter
-	String      filter.Filter
-	Integer     filter.Filter
-	Unsigned    filter.Filter
-	Boolean     filter.Filter
-	Float       filter.Filter
-	Timestamp   filter.Filter
+	Measurement       filter.Filter
+	Tag               filter.Filter
+	String            filter.Filter
+	Integer           filter.Filter
+	Unsigned          filter.Filter
+	Boolean           filter.Filter
+	Float             filter.Filter
+	Timestamp         filter.Filter
+	Base64IEEEFloat32 filter.Filter
 }
 
 func (*Converter) SampleConfig() string {
@@ -79,7 +82,7 @@ func (p *Converter) compile() error {
 	}
 
 	if tf == nil && ff == nil {
-		return fmt.Errorf("no filters found")
+		return errors.New("no filters found")
 	}
 
 	p.tagConversions = tf
@@ -134,6 +137,11 @@ func compileFilter(conv *Conversion) (*ConversionFilter, error) {
 		return nil, err
 	}
 
+	cf.Base64IEEEFloat32, err = filter.Compile(conv.Base64IEEEFloat32)
+	if err != nil {
+		return nil, err
+	}
+
 	return cf, nil
 }
 
@@ -144,80 +152,46 @@ func (p *Converter) convertTags(metric telegraf.Metric) {
 	}
 
 	for key, value := range metric.Tags() {
-		if p.tagConversions.Measurement != nil && p.tagConversions.Measurement.Match(key) {
-			metric.RemoveTag(key)
+		switch {
+		case p.tagConversions.Measurement != nil && p.tagConversions.Measurement.Match(key):
 			metric.SetName(value)
-			continue
-		}
-
-		if p.tagConversions.String != nil && p.tagConversions.String.Match(key) {
-			metric.RemoveTag(key)
+		case p.tagConversions.String != nil && p.tagConversions.String.Match(key):
 			metric.AddField(key, value)
+		case p.tagConversions.Integer != nil && p.tagConversions.Integer.Match(key):
+			if v, err := toInteger(value); err != nil {
+				p.Log.Errorf("Converting to integer [%T] failed: %v", value, err)
+			} else {
+				metric.AddField(key, v)
+			}
+		case p.tagConversions.Unsigned != nil && p.tagConversions.Unsigned.Match(key):
+			if v, err := toUnsigned(value); err != nil {
+				p.Log.Errorf("Converting to unsigned [%T] failed: %v", value, err)
+			} else {
+				metric.AddField(key, v)
+			}
+		case p.tagConversions.Boolean != nil && p.tagConversions.Boolean.Match(key):
+			if v, err := internal.ToBool(value); err != nil {
+				p.Log.Errorf("Converting to boolean [%T] failed: %v", value, err)
+			} else {
+				metric.AddField(key, v)
+			}
+		case p.tagConversions.Float != nil && p.tagConversions.Float.Match(key):
+			if v, err := toFloat(value); err != nil {
+				p.Log.Errorf("Converting to float [%T] failed: %v", value, err)
+			} else {
+				metric.AddField(key, v)
+			}
+		case p.tagConversions.Timestamp != nil && p.tagConversions.Timestamp.Match(key):
+			if time, err := internal.ParseTimestamp(p.Tags.TimestampFormat, value, nil); err != nil {
+				p.Log.Errorf("Converting to timestamp [%T] failed: %v", value, err)
+				continue
+			} else {
+				metric.SetTime(time)
+			}
+		default:
 			continue
 		}
-
-		if p.tagConversions.Integer != nil && p.tagConversions.Integer.Match(key) {
-			v, ok := toInteger(value)
-			if !ok {
-				metric.RemoveTag(key)
-				p.Log.Errorf("error converting to integer [%T]: %v", value, value)
-				continue
-			}
-
-			metric.RemoveTag(key)
-			metric.AddField(key, v)
-		}
-
-		if p.tagConversions.Unsigned != nil && p.tagConversions.Unsigned.Match(key) {
-			v, ok := toUnsigned(value)
-			if !ok {
-				metric.RemoveTag(key)
-				p.Log.Errorf("error converting to unsigned [%T]: %v", value, value)
-				continue
-			}
-
-			metric.RemoveTag(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.tagConversions.Boolean != nil && p.tagConversions.Boolean.Match(key) {
-			v, ok := toBool(value)
-			if !ok {
-				metric.RemoveTag(key)
-				p.Log.Errorf("error converting to boolean [%T]: %v", value, value)
-				continue
-			}
-
-			metric.RemoveTag(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.tagConversions.Float != nil && p.tagConversions.Float.Match(key) {
-			v, ok := toFloat(value)
-			if !ok {
-				metric.RemoveTag(key)
-				p.Log.Errorf("error converting to float [%T]: %v", value, value)
-				continue
-			}
-
-			metric.RemoveTag(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.tagConversions.Timestamp != nil && p.tagConversions.Timestamp.Match(key) {
-			time, err := internal.ParseTimestamp(p.Tags.TimestampFormat, value, nil)
-			if err != nil {
-				p.Log.Errorf("error converting to timestamp [%T]: %v", value, value)
-				continue
-			}
-
-			metric.RemoveTag(key)
-			metric.SetTime(time)
-			continue
-		}
+		metric.RemoveTag(key)
 	}
 }
 
@@ -228,277 +202,191 @@ func (p *Converter) convertFields(metric telegraf.Metric) {
 	}
 
 	for key, value := range metric.Fields() {
-		if p.fieldConversions.Measurement != nil && p.fieldConversions.Measurement.Match(key) {
-			v, ok := toString(value)
-			if !ok {
+		switch {
+		case p.fieldConversions.Measurement != nil && p.fieldConversions.Measurement.Match(key):
+			if v, err := internal.ToString(value); err != nil {
+				p.Log.Errorf("Converting to measurement [%T] failed: %v", value, err)
+			} else {
+				metric.SetName(v)
+			}
+			metric.RemoveField(key)
+		case p.fieldConversions.Tag != nil && p.fieldConversions.Tag.Match(key):
+			if v, err := internal.ToString(value); err != nil {
+				p.Log.Errorf("Converting to tag [%T] failed: %v", value, err)
+			} else {
+				metric.AddTag(key, v)
+			}
+			metric.RemoveField(key)
+		case p.fieldConversions.Float != nil && p.fieldConversions.Float.Match(key):
+			if v, err := toFloat(value); err != nil {
+				p.Log.Errorf("Converting to float [%T] failed: %v", value, err)
 				metric.RemoveField(key)
-				p.Log.Errorf("error converting to measurement [%T]: %v", value, value)
-				continue
+			} else {
+				metric.AddField(key, v)
 			}
-
-			metric.RemoveField(key)
-			metric.SetName(v)
-			continue
-		}
-
-		if p.fieldConversions.Tag != nil && p.fieldConversions.Tag.Match(key) {
-			v, ok := toString(value)
-			if !ok {
+		case p.fieldConversions.Integer != nil && p.fieldConversions.Integer.Match(key):
+			if v, err := toInteger(value); err != nil {
+				p.Log.Errorf("Converting to integer [%T] failed: %v", value, err)
 				metric.RemoveField(key)
-				p.Log.Errorf("error converting to tag [%T]: %v", value, value)
-				continue
+			} else {
+				metric.AddField(key, v)
 			}
-
-			metric.RemoveField(key)
-			metric.AddTag(key, v)
-			continue
-		}
-
-		if p.fieldConversions.Float != nil && p.fieldConversions.Float.Match(key) {
-			v, ok := toFloat(value)
-			if !ok {
+		case p.fieldConversions.Unsigned != nil && p.fieldConversions.Unsigned.Match(key):
+			if v, err := toUnsigned(value); err != nil {
+				p.Log.Errorf("Converting to unsigned [%T] failed: %v", value, err)
 				metric.RemoveField(key)
-				p.Log.Errorf("error converting to float [%T]: %v", value, value)
-				continue
+			} else {
+				metric.AddField(key, v)
 			}
-
-			metric.RemoveField(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.fieldConversions.Integer != nil && p.fieldConversions.Integer.Match(key) {
-			v, ok := toInteger(value)
-			if !ok {
+		case p.fieldConversions.Boolean != nil && p.fieldConversions.Boolean.Match(key):
+			if v, err := internal.ToBool(value); err != nil {
+				p.Log.Errorf("Converting to bool [%T] failed: %v", value, err)
 				metric.RemoveField(key)
-				p.Log.Errorf("error converting to integer [%T]: %v", value, value)
-				continue
+			} else {
+				metric.AddField(key, v)
 			}
-
-			metric.RemoveField(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.fieldConversions.Unsigned != nil && p.fieldConversions.Unsigned.Match(key) {
-			v, ok := toUnsigned(value)
-			if !ok {
+		case p.fieldConversions.String != nil && p.fieldConversions.String.Match(key):
+			if v, err := internal.ToString(value); err != nil {
+				p.Log.Errorf("Converting to string [%T] failed: %v", value, err)
 				metric.RemoveField(key)
-				p.Log.Errorf("error converting to unsigned [%T]: %v", value, value)
-				continue
+			} else {
+				metric.AddField(key, v)
 			}
-
-			metric.RemoveField(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.fieldConversions.Boolean != nil && p.fieldConversions.Boolean.Match(key) {
-			v, ok := toBool(value)
-			if !ok {
+		case p.fieldConversions.Timestamp != nil && p.fieldConversions.Timestamp.Match(key):
+			if time, err := internal.ParseTimestamp(p.Fields.TimestampFormat, value, nil); err != nil {
+				p.Log.Errorf("Converting to timestamp [%T] failed: %v", value, err)
+			} else {
+				metric.SetTime(time)
 				metric.RemoveField(key)
-				p.Log.Errorf("error converting to bool [%T]: %v", value, value)
-				continue
 			}
 
-			metric.RemoveField(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.fieldConversions.String != nil && p.fieldConversions.String.Match(key) {
-			v, ok := toString(value)
-			if !ok {
+		case p.fieldConversions.Base64IEEEFloat32 != nil && p.fieldConversions.Base64IEEEFloat32.Match(key):
+			if v, err := base64ToFloat32(value.(string)); err != nil {
+				p.Log.Errorf("Converting to base64_ieee_float32 [%T] failed: %v", value, err)
 				metric.RemoveField(key)
-				p.Log.Errorf("Error converting to string [%T]: %v", value, value)
-				continue
+			} else {
+				metric.AddField(key, v)
 			}
-
-			metric.RemoveField(key)
-			metric.AddField(key, v)
-			continue
-		}
-
-		if p.fieldConversions.Timestamp != nil && p.fieldConversions.Timestamp.Match(key) {
-			time, err := internal.ParseTimestamp(p.Fields.TimestampFormat, value, nil)
-			if err != nil {
-				p.Log.Errorf("error converting to timestamp [%T]: %v", value, value)
-				continue
-			}
-
-			metric.RemoveField(key)
-			metric.SetTime(time)
-			continue
 		}
 	}
 }
 
-func toBool(v interface{}) (val bool, ok bool) {
+func toInteger(v interface{}) (int64, error) {
 	switch value := v.(type) {
-	case int64:
-		return value != 0, true
-	case uint64:
-		return value != 0, true
-	case float64:
-		return value != 0, true
-	case bool:
-		return value, true
-	case string:
-		result, err := strconv.ParseBool(value)
-		return result, err == nil
-	}
-	return false, false
-}
-
-func toInteger(v interface{}) (int64, bool) {
-	switch value := v.(type) {
-	case int64:
-		return value, true
-	case uint64:
-		if value <= uint64(math.MaxInt64) {
-			return int64(value), true
+	case float32:
+		if value < float32(math.MinInt64) {
+			return math.MinInt64, nil
 		}
-		return math.MaxInt64, true
+		if value > float32(math.MaxInt64) {
+			return math.MaxInt64, nil
+		}
+		return int64(math.Round(float64(value))), nil
 	case float64:
 		if value < float64(math.MinInt64) {
-			return math.MinInt64, true
-		} else if value > float64(math.MaxInt64) {
-			return math.MaxInt64, true
-		} else {
-			return int64(math.Round(value)), true
+			return math.MinInt64, nil
 		}
-	case bool:
-		if value {
-			return 1, true
+		if value > float64(math.MaxInt64) {
+			return math.MaxInt64, nil
 		}
-		return 0, true
-	case string:
-		result, err := strconv.ParseInt(value, 0, 64)
+		return int64(math.Round(value)), nil
+	default:
+		if v, err := internal.ToInt64(value); err == nil {
+			return v, nil
+		}
 
+		v, err := internal.ToFloat64(value)
 		if err != nil {
-			var result float64
-			var err error
-
-			if isHexadecimal(value) {
-				result, err = parseHexadecimal(value)
-			} else {
-				result, err = strconv.ParseFloat(value, 64)
-			}
-
-			if err != nil {
-				return 0, false
-			}
-
-			return toInteger(result)
+			return 0, err
 		}
-		return result, true
+
+		if v < float64(math.MinInt64) {
+			return math.MinInt64, nil
+		}
+		if v > float64(math.MaxInt64) {
+			return math.MaxInt64, nil
+		}
+		return int64(math.Round(v)), nil
 	}
-	return 0, false
 }
 
-func toUnsigned(v interface{}) (uint64, bool) {
+func toUnsigned(v interface{}) (uint64, error) {
 	switch value := v.(type) {
-	case uint64:
-		return value, true
-	case int64:
+	case float32:
 		if value < 0 {
-			return 0, true
+			return 0, nil
 		}
-		return uint64(value), true
+		if value > float32(math.MaxUint64) {
+			return math.MaxUint64, nil
+		}
+		return uint64(math.Round(float64(value))), nil
 	case float64:
-		if value < 0.0 {
-			return 0, true
-		} else if value > float64(math.MaxUint64) {
-			return math.MaxUint64, true
-		} else {
-			return uint64(math.Round(value)), true
+		if value < 0 {
+			return 0, nil
 		}
-	case bool:
-		if value {
-			return 1, true
+		if value > float64(math.MaxUint64) {
+			return math.MaxUint64, nil
 		}
-		return 0, true
-	case string:
-		result, err := strconv.ParseUint(value, 0, 64)
+		return uint64(math.Round(value)), nil
+	default:
+		if v, err := internal.ToUint64(value); err == nil {
+			return v, nil
+		}
 
+		v, err := internal.ToFloat64(value)
 		if err != nil {
-			var result float64
-			var err error
-
-			if isHexadecimal(value) {
-				result, err = parseHexadecimal(value)
-			} else {
-				result, err = strconv.ParseFloat(value, 64)
-			}
-
-			if err != nil {
-				return 0, false
-			}
-
-			return toUnsigned(result)
-		}
-		return result, true
-	}
-	return 0, false
-}
-
-func toFloat(v interface{}) (float64, bool) {
-	switch value := v.(type) {
-	case int64:
-		return float64(value), true
-	case uint64:
-		return float64(value), true
-	case float64:
-		return value, true
-	case bool:
-		if value {
-			return 1.0, true
-		}
-		return 0.0, true
-	case string:
-		if isHexadecimal(value) {
-			result, err := parseHexadecimal(value)
-			return result, err == nil
+			return 0, err
 		}
 
-		result, err := strconv.ParseFloat(value, 64)
-		return result, err == nil
+		if v < 0 {
+			return 0, nil
+		}
+		if v > float64(math.MaxUint64) {
+			return math.MaxUint64, nil
+		}
+		return uint64(math.Round(v)), nil
 	}
-	return 0.0, false
 }
 
-func toString(v interface{}) (string, bool) {
-	switch value := v.(type) {
-	case int64:
-		return strconv.FormatInt(value, 10), true
-	case uint64:
-		return strconv.FormatUint(value, 10), true
-	case float64:
-		return strconv.FormatFloat(value, 'f', -1, 64), true
-	case bool:
-		return strconv.FormatBool(value), true
-	case string:
-		return value, true
+func toFloat(v interface{}) (float64, error) {
+	if v, ok := v.(string); ok && strings.HasPrefix(v, "0x") {
+		var i big.Int
+		if _, success := i.SetString(v, 0); !success {
+			return 0, errors.New("unable to parse string to big int")
+		}
+
+		var f big.Float
+		f.SetInt(&i)
+		result, _ := f.Float64()
+
+		return result, nil
 	}
-	return "", false
+	return internal.ToFloat64(v)
 }
 
-func parseHexadecimal(value string) (float64, error) {
-	i := new(big.Int)
-
-	_, success := i.SetString(value, 0)
-	if !success {
-		return 0, errors.New("unable to parse string to big int")
+func base64ToFloat32(encoded string) (float32, error) {
+	// Decode the Base64 string to bytes
+	decodedBytes, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return 0, err
 	}
 
-	f := new(big.Float).SetInt(i)
-	result, _ := f.Float64()
+	// Check if the byte length matches a float32 (4 bytes)
+	if len(decodedBytes) != 4 {
+		return 0, errors.New("decoded byte length is not 4 bytes")
+	}
 
-	return result, nil
-}
+	// Convert the bytes to a string representation as per IEEE 754 of the bits
+	bitsStrRepresentation := fmt.Sprintf("%08b%08b%08b%08b", decodedBytes[0], decodedBytes[1], decodedBytes[2], decodedBytes[3])
 
-func isHexadecimal(value string) bool {
-	return len(value) >= 3 && strings.ToLower(value)[1] == 'x'
+	// Convert the bits to a uint32
+	bits, err := strconv.ParseUint(bitsStrRepresentation, 2, 32)
+
+	if err != nil {
+		return 0, err
+	}
+
+	// Convert the uint32 (bits) to a float32 based on IEEE 754 binary representation
+	return math.Float32frombits(uint32(bits)), nil
 }
 
 func init() {

@@ -11,7 +11,7 @@ import (
 type SASLAuth struct {
 	SASLUsername   config.Secret     `toml:"sasl_username"`
 	SASLPassword   config.Secret     `toml:"sasl_password"`
-	SASLExtentions map[string]string `toml:"sasl_extensions"`
+	SASLExtensions map[string]string `toml:"sasl_extensions"`
 	SASLMechanism  string            `toml:"sasl_mechanism"`
 	SASLVersion    *int              `toml:"sasl_version"`
 
@@ -34,13 +34,13 @@ func (k *SASLAuth) SetSASLConfig(cfg *sarama.Config) error {
 		return fmt.Errorf("getting username failed: %w", err)
 	}
 	cfg.Net.SASL.User = username.String()
-	username.Destroy()
+	defer username.Destroy()
 	password, err := k.SASLPassword.Get()
 	if err != nil {
 		return fmt.Errorf("getting password failed: %w", err)
 	}
 	cfg.Net.SASL.Password = password.String()
-	password.Destroy()
+	defer password.Destroy()
 
 	if k.SASLMechanism != "" {
 		cfg.Net.SASL.Mechanism = sarama.SASLMechanism(k.SASLMechanism)
@@ -92,7 +92,7 @@ func (k *SASLAuth) Token() (*sarama.AccessToken, error) {
 	defer token.Destroy()
 	return &sarama.AccessToken{
 		Token:      token.String(),
-		Extensions: k.SASLExtentions,
+		Extensions: k.SASLExtensions,
 	}, nil
 }
 

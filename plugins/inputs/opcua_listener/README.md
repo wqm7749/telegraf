@@ -48,10 +48,21 @@ to use them.
   ## Maximum time allowed to establish a connect to the endpoint.
   # connect_timeout = "10s"
   #
+  ## Behavior when we fail to connect to the endpoint on initialization. Valid options are:
+  ##     "error": throw an error and exits Telegraf
+  ##     "ignore": ignore this plugin if errors are encountered
+  #      "retry": retry connecting at each interval
+  # connect_fail_behavior = "error"
+  #
   ## Maximum time allowed for a request over the established connection.
   # request_timeout = "5s"
   #
-  ## The interval at which the server should at least update its monitored items
+  # Maximum time that a session shall remain open without activity.
+  # session_timeout = "20m"
+  #
+  ## The interval at which the server should at least update its monitored items.
+  ## Please note that the OPC UA server might reject the specified interval if it cannot meet the required update rate.
+  ## Therefore, always refer to the hardware/software documentation of your server to ensure the specified interval is supported.
   # subscription_interval = "100ms"
   #
   ## Security policy, one of "None", "Basic128Rsa15", "Basic256",
@@ -90,6 +101,13 @@ to use them.
   # layout specification from https://golang.org/pkg/time/#Time.Format
   # e.g.: json_timestamp_format = "2006-01-02T15:04:05Z07:00"
   #timestamp_format = ""
+  #
+  #
+  ## Client trace messages
+  ## When set to true, and debug mode enabled in the agent settings, the OPCUA
+  ## client's messages are included in telegraf logs. These messages are very
+  ## noisey, but essential for debugging issues.
+  # client_trace = false
   #
   ## Include additional Fields in each metric
   ## Available options are:
@@ -136,10 +154,10 @@ to use them.
   ##
   ## Use either the inline notation or the bracketed notation, not both.
   #
-  ## Inline notation (default_tags not supported yet)
+  ## Inline notation (default_tags and monitoring_params not supported yet)
   # nodes = [
-  #   {name="node1", namespace="", identifier_type="", identifier="",}
-  #   {name="node2", namespace="", identifier_type="", identifier="", monitoring_params={sampling_interval="0s", queue_size=10, discard_oldest=true, data_change_filter={trigger="Status", deadband_type="Absolute", deadband_value=0.0}}},
+  #   {name="node1", namespace="", identifier_type="", identifier=""},
+  #   {name="node2", namespace="", identifier_type="", identifier=""}
   # ]
   #
   ## Bracketed notation
@@ -201,10 +219,10 @@ to use them.
   ## Node ID Configuration.  Array of nodes with the same settings as above.
   ## Use either the inline notation or the bracketed notation, not both.
   #
-  ## Inline notation (default_tags not supported yet)
+  ## Inline notation (default_tags and monitoring_params not supported yet)
   # nodes = [
-  #  {name="node1", namespace="", identifier_type="", identifier="",}
-  #  {name="node2", namespace="", identifier_type="", identifier="", monitoring_params={sampling_interval="0s", queue_size=10, discard_oldest=true, data_change_filter={trigger="Status", deadband_type="Absolute", deadband_value=0.0}}},
+  #  {name="node1", namespace="", identifier_type="", identifier=""},
+  #  {name="node2", namespace="", identifier_type="", identifier=""}
   #]
   #
   ## Bracketed notation
@@ -252,7 +270,7 @@ An OPC UA node ID may resemble: "ns=3;s=Temperature". In this example:
 To gather data from this node enter the following line into the 'nodes' property above:
 
 ```text
-{field_name="temp", namespace="3", identifier_type="s", identifier="Temperature"},
+{name="temp", namespace="3", identifier_type="s", identifier="Temperature"},
 ```
 
 This node configuration produces a metric like this:

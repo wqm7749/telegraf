@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/plugins/outputs"
-	"github.com/influxdata/telegraf/plugins/serializers"
 )
 
 //go:embed sample.conf
@@ -44,7 +44,7 @@ type PubSub struct {
 
 	stubTopic func(id string) topic
 
-	serializer     serializers.Serializer
+	serializer     telegraf.Serializer
 	publishResults []publishResult
 	encoder        internal.ContentEncoder
 }
@@ -53,7 +53,7 @@ func (*PubSub) SampleConfig() string {
 	return sampleConfig
 }
 
-func (ps *PubSub) SetSerializer(serializer serializers.Serializer) {
+func (ps *PubSub) SetSerializer(serializer telegraf.Serializer) {
 	ps.serializer = serializer
 }
 
@@ -258,11 +258,11 @@ func (ps *PubSub) waitForResults(ctx context.Context, cancel context.CancelFunc)
 
 func (ps *PubSub) Init() error {
 	if ps.Topic == "" {
-		return fmt.Errorf(`"topic" is required`)
+		return errors.New(`"topic" is required`)
 	}
 
 	if ps.Project == "" {
-		return fmt.Errorf(`"project" is required`)
+		return errors.New(`"project" is required`)
 	}
 
 	switch ps.ContentEncoding {

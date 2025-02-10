@@ -35,7 +35,7 @@ to use them.
 
   ## Data source name for connecting
   ## The syntax and supported options depends on selected driver.
-  dsn = "username:password@mysqlserver:3307/dbname?param=value"
+  dsn = "username:password@tcp(mysqlserver:3307)/dbname?param=value"
 
   ## Timeout for any operation
   ## Note that the timeout for queries is per query not per gather.
@@ -79,7 +79,7 @@ to use them.
     # measurement_column = ""
 
     ## Column name containing the time of the measurement
-    ## If ommited, the time of the query will be used.
+    ## If omitted, the time of the query will be used.
     # time_column = ""
 
     ## Format of the time contained in 'time_col'

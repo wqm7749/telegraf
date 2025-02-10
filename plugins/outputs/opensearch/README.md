@@ -1,10 +1,17 @@
 # OpenSearch Output Plugin
 
-This plugin writes to [OpenSearch](https://opensearch.org/) via HTTP
+This plugin writes metrics to a [OpenSearch][opensearch] instance via HTTP.
+It supports OpenSearch releases v1 and v2 but future comparability with 1.x is
+not guaranteed and instead will focus on 2.x support.
 
-It supports OpenSearch releases from 1 and 2. Future comparability with 1.x is
-not guaranteed and instead will focus on 2.x support. Consider using the
-existing Elasticsearch plugin for 1.x.
+> [!TIP]
+> Consider using the existing Elasticsearch plugin for 1.x.
+
+⭐ Telegraf v1.29.0
+🏷️ datastore, logging
+💻 all
+
+[opensearch]: https://opensearch.org/
 
 ## Global configuration options <!-- @/docs/includes/plugin_config.md -->
 
@@ -19,7 +26,7 @@ See the [CONFIGURATION.md][CONFIGURATION.md] for more details.
 
 ```toml @sample.conf
 # Configuration for OpenSearch to send metrics to.
-[[outputs.OpenSearch]]
+[[outputs.opensearch]]
   ## URLs
   ## The full HTTP endpoint URL for your OpenSearch instance. Multiple URLs can
   ## be specified as part of the same cluster, but only one URLs is used to
@@ -33,7 +40,7 @@ See the [CONFIGURATION.md][CONFIGURATION.md] for more details.
   ## metric name (`{{.Name}}`), tag value (`{{.Tag "tag_name"}}`), field value (`{{.Field "field_name"}}`)
   ## If the tag does not exist, the default tag value will be empty string "".
   ## the timestamp (`{{.Time.Format "xxxxxxxxx"}}`).
-  ## For example: "telegraf-{{.Time.Format "2006-01-02"}}-{{.Tag "host"}}" would set it to telegraf-2023-07-27-HostName
+  ## For example: "telegraf-{{.Time.Format \"2006-01-02\"}}-{{.Tag \"host\"}}" would set it to telegraf-2023-07-27-HostName
   index_name = ""
 
   ## Timeout
@@ -127,9 +134,10 @@ See the [CONFIGURATION.md][CONFIGURATION.md] for more details.
   OpenSearch instance.
 * `index_name`: The target index for metrics. You can use the date format
 
-For example: "telegraf-{{.Time.Format "2006-01-02"}}" would set it to
+For example: "telegraf-{{.Time.Format \"2006-01-02\"}}" would set it to
 "telegraf-2023-07-27". You can also specify metric name (`{{ .Name }}`), tag
-value (`{{ .Tag "tag_name" }}`), and field value (`{{ .Field "field_name" }}`).
+value (`{{ .Tag \"tag_name\" }}`), and field value
+(`{{ .Field \"field_name\" }}`).
 
 If the tag does not exist, the default tag value will be empty string ""
 

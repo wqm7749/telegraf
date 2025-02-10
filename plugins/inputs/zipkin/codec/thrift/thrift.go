@@ -3,6 +3,7 @@ package thrift
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -44,7 +45,7 @@ func UnmarshalThrift(body []byte) ([]*zipkincore.Span, error) {
 type Thrift struct{}
 
 // Decode unmarshals and validates bytes in thrift format
-func (t *Thrift) Decode(octets []byte) ([]codec.Span, error) {
+func (*Thrift) Decode(octets []byte) ([]codec.Span, error) {
 	spans, err := UnmarshalThrift(octets)
 	if err != nil {
 		return nil, err
@@ -144,7 +145,7 @@ type span struct {
 
 func (s *span) Trace() (string, error) {
 	if s.Span.GetTraceIDHigh() == 0 && s.Span.GetTraceID() == 0 {
-		return "", fmt.Errorf("Span does not have a trace ID")
+		return "", errors.New("span does not have a trace ID")
 	}
 
 	if s.Span.GetTraceIDHigh() == 0 {

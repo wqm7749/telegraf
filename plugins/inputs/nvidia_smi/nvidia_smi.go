@@ -31,19 +31,20 @@ type NvidiaSMI struct {
 	Timeout config.Duration `toml:"timeout"`
 	Log     telegraf.Logger `toml:"-"`
 
-	once sync.Once
+	nvidiaSMIArgs []string
+	ignorePlugin  bool
+	once          sync.Once
 }
 
 func (*NvidiaSMI) SampleConfig() string {
 	return sampleConfig
 }
 
-func (smi *NvidiaSMI) Init() error {
+func (smi *NvidiaSMI) Start(telegraf.Accumulator) error {
 	if _, err := os.Stat(smi.BinPath); os.IsNotExist(err) {
 		binPath, err := exec.LookPath("nvidia-smi")
-		// fail-fast
 		if err != nil {
-			return fmt.Errorf("nvidia-smi not found in %q and not in PATH; please make sure nvidia-smi is installed and/or is in PATH", smi.BinPath)
+			return &internal.StartupError{Err: err}
 		}
 		smi.BinPath = binPath
 	}
@@ -51,10 +52,25 @@ func (smi *NvidiaSMI) Init() error {
 	return nil
 }
 
+func (*NvidiaSMI) Stop() {}
+
+func (smi *NvidiaSMI) Probe() error {
+	// Construct and execute metrics query
+	_, err := internal.CombinedOutputTimeout(exec.Command(smi.BinPath, smi.nvidiaSMIArgs...), time.Duration(smi.Timeout))
+	if err != nil {
+		return fmt.Errorf("calling %q failed: %w", smi.BinPath, err)
+	}
+	return nil
+}
+
 // Gather implements the telegraf interface
 func (smi *NvidiaSMI) Gather(acc telegraf.Accumulator) error {
+	if smi.ignorePlugin {
+		return nil
+	}
+
 	// Construct and execute metrics query
-	data, err := internal.CombinedOutputTimeout(exec.Command(smi.BinPath, "-q", "-x"), time.Duration(smi.Timeout))
+	data, err := internal.CombinedOutputTimeout(exec.Command(smi.BinPath, smi.nvidiaSMIArgs...), time.Duration(smi.Timeout))
 	if err != nil {
 		return fmt.Errorf("calling %q failed: %w", smi.BinPath, err)
 	}
@@ -113,8 +129,9 @@ func (smi *NvidiaSMI) parse(acc telegraf.Accumulator, data []byte) error {
 func init() {
 	inputs.Add("nvidia_smi", func() telegraf.Input {
 		return &NvidiaSMI{
-			BinPath: "/usr/bin/nvidia-smi",
-			Timeout: config.Duration(5 * time.Second),
+			BinPath:       "/usr/bin/nvidia-smi",
+			Timeout:       config.Duration(5 * time.Second),
+			nvidiaSMIArgs: []string{"-q", "-x"},
 		}
 	})
 }

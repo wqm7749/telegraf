@@ -103,9 +103,7 @@ func TestShort_SampleData(t *testing.T) {
 	for _, tC := range testCases {
 		t.Run(tC.desc, func(t *testing.T) {
 			s := &Supervisor{
-				Server:     "http://example.org:9001/RPC2",
-				MetricsInc: []string{},
-				MetricsExc: []string{},
+				Server: "http://example.org:9001/RPC2",
 			}
 			status := supervisorInfo{
 				StateCode: tC.supervisorData.StateCode,
@@ -140,7 +138,7 @@ func TestIntegration_BasicGathering(t *testing.T) {
 	ctr := testutil.Container{
 		Image:        "niasar/supervisor:stretch-3.3",
 		ExposedPorts: []string{supervisorPort},
-		BindMounts: map[string]string{
+		Files: map[string]string{
 			"/etc/supervisor/supervisord.conf": supervisorConfig,
 		},
 		WaitingFor: wait.ForAll(
@@ -152,9 +150,7 @@ func TestIntegration_BasicGathering(t *testing.T) {
 	require.NoError(t, err, "failed to start container")
 	defer ctr.Terminate()
 	s := &Supervisor{
-		Server:     "http://login:pass@" + testutil.GetLocalHost() + ":" + ctr.Ports[supervisorPort] + "/RPC2",
-		MetricsInc: []string{},
-		MetricsExc: []string{},
+		Server: "http://login:pass@" + testutil.GetLocalHost() + ":" + ctr.Ports[supervisorPort] + "/RPC2",
 	}
 	err = s.Init()
 	require.NoError(t, err, "failed to run Init function")

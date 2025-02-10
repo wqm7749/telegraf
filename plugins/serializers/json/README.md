@@ -102,7 +102,7 @@ reference the documentation for the specific plugin.
 ## Transformations
 
 Transformations using the [JSONata standard](https://jsonata.org/) can be specified with
-the `json_tansformation` parameter. The input to the transformation is the serialized
+the `json_transformation` parameter. The input to the transformation is the serialized
 metric in the standard-form above.
 
 **Note**: There is a difference in batch and non-batch serialization mode!
@@ -159,7 +159,7 @@ to get
 }
 ```
 
-It is also possible to do arithmetics or renaming
+It is also possible to do arithmetic or renaming
 
 ```json
 {
@@ -183,7 +183,7 @@ will result in
 
 ### Batch mode
 
-When an output plugin emits multiple metrics in a batch fashion it might be usefull
+When an output plugin emits multiple metrics in a batch fashion it might be useful
 to restructure and/or combine the metric elements. We will use the following input
 example in this section
 

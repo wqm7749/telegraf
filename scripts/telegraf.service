@@ -6,6 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=notify
+NotifyAccess=all
 EnvironmentFile=-/etc/default/telegraf
 User=telegraf
 ImportCredential=telegraf.*
@@ -14,7 +15,6 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartForceExitStatus=SIGPIPE
 KillMode=mixed
-TimeoutStopSec=5
 LimitMEMLOCK=8M:8M
 PrivateMounts=true
 

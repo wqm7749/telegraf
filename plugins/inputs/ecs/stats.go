@@ -5,13 +5,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 
 	"github.com/influxdata/telegraf"
-	"github.com/influxdata/telegraf/plugins/inputs/docker"
+	"github.com/influxdata/telegraf/plugins/common/docker"
 )
 
-func parseContainerStats(c *Container, acc telegraf.Accumulator, tags map[string]string) {
+func parseContainerStats(c *ecsContainer, acc telegraf.Accumulator, tags map[string]string) {
 	id := c.ID
 	stats := &c.Stats
 	tm := stats.Read
@@ -27,7 +27,7 @@ func parseContainerStats(c *Container, acc telegraf.Accumulator, tags map[string
 	blkstats(id, stats, acc, tags, tm)
 }
 
-func metastats(id string, c *Container, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
+func metastats(id string, c *ecsContainer, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
 	metafields := map[string]interface{}{
 		"container_id":   id,
 		"docker_name":    c.DockerName,
@@ -45,7 +45,7 @@ func metastats(id string, c *Container, acc telegraf.Accumulator, tags map[strin
 	acc.AddFields("ecs_container_meta", metafields, tags, tm)
 }
 
-func memstats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
+func memstats(id string, stats *container.StatsResponse, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
 	memfields := map[string]interface{}{
 		"container_id": id,
 	}
@@ -102,7 +102,7 @@ func memstats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags 
 	acc.AddFields("ecs_container_mem", memfields, tags, tm)
 }
 
-func cpustats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
+func cpustats(id string, stats *container.StatsResponse, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
 	cpufields := map[string]interface{}{
 		"usage_total":                  stats.CPUStats.CPUUsage.TotalUsage,
 		"usage_in_usermode":            stats.CPUStats.CPUUsage.UsageInUsermode,
@@ -143,7 +143,7 @@ func cpustats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags 
 	}
 }
 
-func netstats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
+func netstats(id string, stats *container.StatsResponse, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
 	totalNetworkStatMap := make(map[string]interface{})
 	for network, netstats := range stats.Networks {
 		netfields := map[string]interface{}{
@@ -195,7 +195,7 @@ func netstats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags 
 	}
 }
 
-func blkstats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
+func blkstats(id string, stats *container.StatsResponse, acc telegraf.Accumulator, tags map[string]string, tm time.Time) {
 	blkioStats := stats.BlkioStats
 	// Make a map of devices to their block io stats
 	deviceStatMap := make(map[string]map[string]interface{})
@@ -207,7 +207,7 @@ func blkstats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags 
 			deviceStatMap[device] = make(map[string]interface{})
 		}
 
-		field := fmt.Sprintf("io_service_bytes_recursive_%s", strings.ToLower(metric.Op))
+		field := "io_service_bytes_recursive_" + strings.ToLower(metric.Op)
 		deviceStatMap[device][field] = metric.Value
 	}
 
@@ -218,31 +218,31 @@ func blkstats(id string, stats *types.StatsJSON, acc telegraf.Accumulator, tags 
 			deviceStatMap[device] = make(map[string]interface{})
 		}
 
-		field := fmt.Sprintf("io_serviced_recursive_%s", strings.ToLower(metric.Op))
+		field := "io_serviced_recursive_" + strings.ToLower(metric.Op)
 		deviceStatMap[device][field] = metric.Value
 	}
 
 	for _, metric := range blkioStats.IoQueuedRecursive {
 		device := fmt.Sprintf("%d:%d", metric.Major, metric.Minor)
-		field := fmt.Sprintf("io_queue_recursive_%s", strings.ToLower(metric.Op))
+		field := "io_queue_recursive_" + strings.ToLower(metric.Op)
 		deviceStatMap[device][field] = metric.Value
 	}
 
 	for _, metric := range blkioStats.IoServiceTimeRecursive {
 		device := fmt.Sprintf("%d:%d", metric.Major, metric.Minor)
-		field := fmt.Sprintf("io_service_time_recursive_%s", strings.ToLower(metric.Op))
+		field := "io_service_time_recursive_" + strings.ToLower(metric.Op)
 		deviceStatMap[device][field] = metric.Value
 	}
 
 	for _, metric := range blkioStats.IoWaitTimeRecursive {
 		device := fmt.Sprintf("%d:%d", metric.Major, metric.Minor)
-		field := fmt.Sprintf("io_wait_time_%s", strings.ToLower(metric.Op))
+		field := "io_wait_time_" + strings.ToLower(metric.Op)
 		deviceStatMap[device][field] = metric.Value
 	}
 
 	for _, metric := range blkioStats.IoMergedRecursive {
 		device := fmt.Sprintf("%d:%d", metric.Major, metric.Minor)
-		field := fmt.Sprintf("io_merged_recursive_%s", strings.ToLower(metric.Op))
+		field := "io_merged_recursive_" + strings.ToLower(metric.Op)
 		deviceStatMap[device][field] = metric.Value
 	}
 

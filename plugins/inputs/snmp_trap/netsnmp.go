@@ -3,7 +3,7 @@ package snmp_trap
 import (
 	"bufio"
 	"bytes"
-	"fmt"
+	"errors"
 	"os/exec"
 	"strings"
 	"sync"
@@ -39,7 +39,7 @@ type netsnmpTranslator struct {
 	cacheLock sync.Mutex
 	cache     map[string]snmp.MibEntry
 	execCmd   execer
-	Timeout   config.Duration
+	timeout   config.Duration
 }
 
 func (s *netsnmpTranslator) lookup(oid string) (e snmp.MibEntry, err error) {
@@ -59,7 +59,7 @@ func (s *netsnmpTranslator) lookup(oid string) (e snmp.MibEntry, err error) {
 
 func (s *netsnmpTranslator) snmptranslate(oid string) (e snmp.MibEntry, err error) {
 	var out []byte
-	out, err = s.execCmd(s.Timeout, "snmptranslate", "-Td", "-Ob", "-m", "all", oid)
+	out, err = s.execCmd(s.timeout, "snmptranslate", "-Td", "-Ob", "-m", "all", oid)
 
 	if err != nil {
 		return e, err
@@ -75,7 +75,7 @@ func (s *netsnmpTranslator) snmptranslate(oid string) (e snmp.MibEntry, err erro
 
 	i := strings.Index(e.OidText, "::")
 	if i == -1 {
-		return e, fmt.Errorf("not found")
+		return e, errors.New("not found")
 	}
 	e.MibName = e.OidText[:i]
 	e.OidText = e.OidText[i+2:]
@@ -86,6 +86,6 @@ func newNetsnmpTranslator(timeout config.Duration) *netsnmpTranslator {
 	return &netsnmpTranslator{
 		execCmd: realExecCmd,
 		cache:   make(map[string]snmp.MibEntry),
-		Timeout: timeout,
+		timeout: timeout,
 	}
 }

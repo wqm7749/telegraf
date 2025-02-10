@@ -28,68 +28,69 @@ const (
 	defaultPingDataBytesSize = 56
 )
 
-// HostPinger is a function that runs the "ping" function using a list of
+type Ping struct {
+	Urls         []string `toml:"urls"`          // URLs to ping
+	Method       string   `toml:"method"`        // Method defines how to ping (native or exec)
+	Count        int      `toml:"count"`         // Number of pings to send (ping -c <COUNT>)
+	PingInterval float64  `toml:"ping_interval"` // Interval at which to ping (ping -i <INTERVAL>)
+	Timeout      float64  `toml:"timeout"`       // Per-ping timeout, in seconds. 0 means no timeout (ping -W <TIMEOUT>)
+	Deadline     int      `toml:"deadline"`      // Ping deadline, in seconds. 0 means no deadline. (ping -w <DEADLINE>)
+	Interface    string   `toml:"interface"`     // Interface or source address to send ping from (ping -I/-S <INTERFACE/SRC_ADDR>)
+	Percentiles  []int    `toml:"percentiles"`   // Calculate the given percentiles when using native method
+	Binary       string   `toml:"binary"`        // Ping executable binary
+	// Arguments for ping command. When arguments are not empty, system binary will be used and other options (ping_interval, timeout, etc.) will be ignored
+	Arguments []string        `toml:"arguments"`
+	IPv4      bool            `toml:"ipv4"` // Whether to resolve addresses using ipv4 or not.
+	IPv6      bool            `toml:"ipv6"` // Whether to resolve addresses using ipv6 or not.
+	Size      *int            `toml:"size"` // Packet size
+	Log       telegraf.Logger `toml:"-"`
+
+	wg             sync.WaitGroup // wg is used to wait for ping with multiple URLs
+	calcInterval   time.Duration  // Pre-calculated interval and timeout
+	calcTimeout    time.Duration
+	sourceAddress  string
+	pingHost       hostPingerFunc // host ping function
+	nativePingFunc nativePingFunc
+}
+
+// hostPingerFunc is a function that runs the "ping" function using a list of
 // passed arguments. This can be easily switched with a mocked ping function
 // for unit test purposes (see ping_test.go)
-type HostPinger func(binary string, timeout float64, args ...string) (string, error)
+type hostPingerFunc func(binary string, timeout float64, args ...string) (string, error)
 
-type Ping struct {
-	// wg is used to wait for ping with multiple URLs
-	wg sync.WaitGroup
+type nativePingFunc func(destination string) (*pingStats, error)
 
-	// Pre-calculated interval and timeout
-	calcInterval time.Duration
-	calcTimeout  time.Duration
+type durationSlice []time.Duration
 
-	sourceAddress string
-
-	Log telegraf.Logger `toml:"-"`
-
-	// Interval at which to ping (ping -i <INTERVAL>)
-	PingInterval float64 `toml:"ping_interval"`
-
-	// Number of pings to send (ping -c <COUNT>)
-	Count int
-
-	// Per-ping timeout, in seconds. 0 means no timeout (ping -W <TIMEOUT>)
-	Timeout float64
-
-	// Ping deadline, in seconds. 0 means no deadline. (ping -w <DEADLINE>)
-	Deadline int
-
-	// Interface or source address to send ping from (ping -I/-S <INTERFACE/SRC_ADDR>)
-	Interface string
-
-	// URLs to ping
-	Urls []string
-
-	// Method defines how to ping (native or exec)
-	Method string
-
-	// Ping executable binary
-	Binary string
-
-	// Arguments for ping command. When arguments is not empty, system binary will be used and
-	// other options (ping_interval, timeout, etc.) will be ignored
-	Arguments []string
-
-	// Whether to resolve addresses using ipv6 or not.
-	IPv6 bool
-
-	// host ping function
-	pingHost HostPinger
-
-	nativePingFunc NativePingFunc
-
-	// Calculate the given percentiles when using native method
-	Percentiles []int
-
-	// Packet size
-	Size *int
+type pingStats struct {
+	ping.Statistics
+	ttl int
 }
 
 func (*Ping) SampleConfig() string {
 	return sampleConfig
+}
+
+func (p *Ping) Init() error {
+	if p.Count < 1 {
+		return errors.New("bad number of packets to transmit")
+	}
+
+	// The interval cannot be below 0.2 seconds, matching ping implementation: https://linux.die.net/man/8/ping
+	if p.PingInterval < 0.2 {
+		p.calcInterval = time.Duration(.2 * float64(time.Second))
+	} else {
+		p.calcInterval = time.Duration(p.PingInterval * float64(time.Second))
+	}
+
+	// If no timeout is given default to 5 seconds, matching original implementation
+	if p.Timeout == 0 {
+		p.calcTimeout = time.Duration(5) * time.Second
+	} else {
+		p.calcTimeout = time.Duration(p.Timeout) * time.Second
+	}
+
+	return nil
 }
 
 func (p *Ping) Gather(acc telegraf.Accumulator) error {
@@ -112,13 +113,6 @@ func (p *Ping) Gather(acc telegraf.Accumulator) error {
 	return nil
 }
 
-type pingStats struct {
-	ping.Statistics
-	ttl int
-}
-
-type NativePingFunc func(destination string) (*pingStats, error)
-
 func (p *Ping) nativePing(destination string) (*pingStats, error) {
 	ps := &pingStats{}
 
@@ -129,7 +123,11 @@ func (p *Ping) nativePing(destination string) (*pingStats, error) {
 
 	pinger.SetPrivileged(true)
 
-	if p.IPv6 {
+	if p.IPv4 && p.IPv6 {
+		pinger.SetNetwork("ip")
+	} else if p.IPv4 {
+		pinger.SetNetwork("ip4")
+	} else if p.IPv6 {
 		pinger.SetNetwork("ip6")
 	}
 
@@ -137,6 +135,26 @@ func (p *Ping) nativePing(destination string) (*pingStats, error) {
 		pinger.Size = defaultPingDataBytesSize
 		if p.Size != nil {
 			pinger.Size = *p.Size
+		}
+	}
+
+	// Support either an IP address or interface name
+	if p.Interface != "" && p.sourceAddress == "" {
+		if addr := net.ParseIP(p.Interface); addr != nil {
+			p.sourceAddress = p.Interface
+		} else {
+			i, err := net.InterfaceByName(p.Interface)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get interface: %w", err)
+			}
+			addrs, err := i.Addrs()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get the address of interface: %w", err)
+			}
+			if len(addrs) == 0 {
+				return nil, fmt.Errorf("no address found for interface %s", p.Interface)
+			}
+			p.sourceAddress = addrs[0].(*net.IPNet).IP.String()
 		}
 	}
 
@@ -160,10 +178,10 @@ func (p *Ping) nativePing(destination string) (*pingStats, error) {
 	if err != nil {
 		if strings.Contains(err.Error(), "operation not permitted") {
 			if runtime.GOOS == "linux" {
-				return nil, fmt.Errorf("permission changes required, enable CAP_NET_RAW capabilities (refer to the ping plugin's README.md for more info)")
+				return nil, errors.New("permission changes required, enable CAP_NET_RAW capabilities (refer to the ping plugin's README.md for more info)")
 			}
 
-			return nil, fmt.Errorf("permission changes required, refer to the ping plugin's README.md for more info")
+			return nil, errors.New("permission changes required, refer to the ping plugin's README.md for more info")
 		}
 		return nil, err
 	}
@@ -175,11 +193,11 @@ func (p *Ping) nativePing(destination string) (*pingStats, error) {
 
 func (p *Ping) pingToURLNative(destination string, acc telegraf.Accumulator) {
 	tags := map[string]string{"url": destination}
-	fields := map[string]interface{}{}
 
 	stats, err := p.nativePingFunc(destination)
 	if err != nil {
 		p.Log.Errorf("ping failed: %s", err.Error())
+		fields := make(map[string]interface{}, 1)
 		if strings.Contains(err.Error(), "unknown") {
 			fields["result_code"] = 1
 		} else {
@@ -189,7 +207,7 @@ func (p *Ping) pingToURLNative(destination string, acc telegraf.Accumulator) {
 		return
 	}
 
-	fields = map[string]interface{}{
+	fields := map[string]interface{}{
 		"result_code":         0,
 		"packets_transmitted": stats.PacketsSent,
 		"packets_received":    stats.PacketsRecv,
@@ -223,7 +241,6 @@ func (p *Ping) pingToURLNative(destination string, acc telegraf.Accumulator) {
 		fields["ttl"] = stats.ttl
 	}
 
-	//nolint:unconvert // Conversion may be needed for float64 https://github.com/mdempsky/unconvert/issues/40
 	fields["percent_packet_loss"] = float64(stats.PacketLoss)
 	fields["minimum_response_ms"] = float64(stats.MinRtt) / float64(time.Millisecond)
 	fields["average_response_ms"] = float64(stats.AvgRtt) / float64(time.Millisecond)
@@ -233,11 +250,11 @@ func (p *Ping) pingToURLNative(destination string, acc telegraf.Accumulator) {
 	acc.AddFields("ping", fields, tags)
 }
 
-type durationSlice []time.Duration
+func (p durationSlice) Len() int { return len(p) }
 
-func (p durationSlice) Len() int           { return len(p) }
 func (p durationSlice) Less(i, j int) bool { return p[i] < p[j] }
-func (p durationSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+
+func (p durationSlice) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
 
 // R7 from Hyndman and Fan (1996), which matches Excel
 func percentile(values durationSlice, perc int) time.Duration {
@@ -266,46 +283,6 @@ func percentile(values durationSlice, perc int) time.Duration {
 	return lower + time.Duration(rankFraction*float64(upper-lower))
 }
 
-// Init ensures the plugin is configured correctly.
-func (p *Ping) Init() error {
-	if p.Count < 1 {
-		return errors.New("bad number of packets to transmit")
-	}
-
-	// The interval cannot be below 0.2 seconds, matching ping implementation: https://linux.die.net/man/8/ping
-	if p.PingInterval < 0.2 {
-		p.calcInterval = time.Duration(.2 * float64(time.Second))
-	} else {
-		p.calcInterval = time.Duration(p.PingInterval * float64(time.Second))
-	}
-
-	// If no timeout is given default to 5 seconds, matching original implementation
-	if p.Timeout == 0 {
-		p.calcTimeout = time.Duration(5) * time.Second
-	} else {
-		p.calcTimeout = time.Duration(p.Timeout) * time.Second
-	}
-
-	// Support either an IP address or interface name
-	if p.Interface != "" {
-		if addr := net.ParseIP(p.Interface); addr != nil {
-			p.sourceAddress = p.Interface
-		} else {
-			i, err := net.InterfaceByName(p.Interface)
-			if err != nil {
-				return fmt.Errorf("failed to get interface: %w", err)
-			}
-			addrs, err := i.Addrs()
-			if err != nil {
-				return fmt.Errorf("failed to get the address of interface: %w", err)
-			}
-			p.sourceAddress = addrs[0].(*net.IPNet).IP.String()
-		}
-	}
-
-	return nil
-}
-
 func hostPinger(binary string, timeout float64, args ...string) (string, error) {
 	bin, err := exec.LookPath(binary)
 	if err != nil {
@@ -327,8 +304,8 @@ func init() {
 			Deadline:     10,
 			Method:       "exec",
 			Binary:       "ping",
-			Arguments:    []string{},
-			Percentiles:  []int{},
+			Arguments:    make([]string, 0),
+			Percentiles:  make([]int, 0),
 		}
 		p.nativePingFunc = p.nativePing
 		return p

@@ -7,10 +7,15 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/influxdata/telegraf/testutil"
 	"github.com/robinson/gos7"
 	"github.com/stretchr/testify/require"
+
+	"github.com/influxdata/telegraf/config"
+	"github.com/influxdata/telegraf/internal"
+	"github.com/influxdata/telegraf/models"
+	"github.com/influxdata/telegraf/testutil"
 )
 
 func TestSampleConfig(t *testing.T) {
@@ -273,7 +278,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return false },
+							convert:     func([]byte) interface{} { return false },
 						},
 					},
 				},
@@ -308,7 +313,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return byte(0) },
+							convert:     func([]byte) interface{} { return byte(0) },
 						},
 					},
 				},
@@ -343,7 +348,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return string([]byte{0}) },
+							convert:     func([]byte) interface{} { return string([]byte{0}) },
 						},
 					},
 				},
@@ -378,7 +383,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return "" },
+							convert:     func([]byte) interface{} { return "" },
 						},
 					},
 				},
@@ -413,7 +418,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return uint16(0) },
+							convert:     func([]byte) interface{} { return uint16(0) },
 						},
 					},
 				},
@@ -448,7 +453,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return int16(0) },
+							convert:     func([]byte) interface{} { return int16(0) },
 						},
 					},
 				},
@@ -483,7 +488,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return uint32(0) },
+							convert:     func([]byte) interface{} { return uint32(0) },
 						},
 					},
 				},
@@ -518,7 +523,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return int32(0) },
+							convert:     func([]byte) interface{} { return int32(0) },
 						},
 					},
 				},
@@ -553,7 +558,7 @@ func TestFieldMappings(t *testing.T) {
 						{
 							measurement: "test",
 							field:       "foo",
-							convert:     func(b []byte) interface{} { return float32(0) },
+							convert:     func([]byte) interface{} { return float32(0) },
 						},
 					},
 				},
@@ -706,20 +711,219 @@ func TestMetricCollisions(t *testing.T) {
 
 func TestConnectionLoss(t *testing.T) {
 	// Create fake S7 comm server that can accept connects
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	server, err := newMockServer()
 	require.NoError(t, err)
-	defer listener.Close()
+	defer server.close()
+	server.start()
 
-	var connectionAttempts uint32
+	// Create the plugin and attempt a connection
+	plugin := &S7comm{
+		Server:          server.addr(),
+		Rack:            0,
+		Slot:            2,
+		DebugConnection: true,
+		Timeout:         config.Duration(100 * time.Millisecond),
+		Configs: []metricDefinition{
+			{
+				Fields: []metricFieldDefinition{
+					{
+						Name:    "foo",
+						Address: "DB1.W2",
+					},
+				},
+			},
+		},
+		Log: &testutil.Logger{},
+	}
+	require.NoError(t, plugin.Init())
+
+	var acc testutil.Accumulator
+	require.NoError(t, plugin.Start(&acc))
+	require.NoError(t, plugin.Gather(&acc))
+	require.NoError(t, plugin.Gather(&acc))
+	plugin.Stop()
+	server.close()
+
+	require.Equal(t, uint32(3), server.connectionAttempts.Load())
+}
+
+func TestStartupErrorBehaviorError(t *testing.T) {
+	// Create fake S7 comm server that can accept connects
+	server, err := newMockServer()
+	require.NoError(t, err)
+	defer server.close()
+
+	// Setup the plugin and the model to be able to use the startup retry strategy
+	plugin := &S7comm{
+		Server:          server.addr(),
+		Rack:            0,
+		Slot:            2,
+		DebugConnection: true,
+		Timeout:         config.Duration(100 * time.Millisecond),
+		Configs: []metricDefinition{
+			{
+				Fields: []metricFieldDefinition{
+					{
+						Name:    "foo",
+						Address: "DB1.W2",
+					},
+				},
+			},
+		},
+		Log: &testutil.Logger{},
+	}
+	model := models.NewRunningInput(
+		plugin,
+		&models.InputConfig{
+			Name:  "s7comm",
+			Alias: "error-test", // required to get a unique error stats instance
+		},
+	)
+	model.StartupErrors.Set(0)
+	require.NoError(t, model.Init())
+
+	// Starting the plugin will fail with an error because the server does not listen
+	var acc testutil.Accumulator
+	require.ErrorContains(t, model.Start(&acc), "connecting to \""+server.addr()+"\" failed")
+}
+
+func TestStartupErrorBehaviorIgnore(t *testing.T) {
+	// Create fake S7 comm server that can accept connects
+	server, err := newMockServer()
+	require.NoError(t, err)
+	defer server.close()
+
+	// Setup the plugin and the model to be able to use the startup retry strategy
+	plugin := &S7comm{
+		Server:          server.addr(),
+		Rack:            0,
+		Slot:            2,
+		DebugConnection: true,
+		Timeout:         config.Duration(100 * time.Millisecond),
+		Configs: []metricDefinition{
+			{
+				Fields: []metricFieldDefinition{
+					{
+						Name:    "foo",
+						Address: "DB1.W2",
+					},
+				},
+			},
+		},
+		Log: &testutil.Logger{},
+	}
+	model := models.NewRunningInput(
+		plugin,
+		&models.InputConfig{
+			Name:                 "s7comm",
+			Alias:                "ignore-test", // required to get a unique error stats instance
+			StartupErrorBehavior: "ignore",
+		},
+	)
+	model.StartupErrors.Set(0)
+	require.NoError(t, model.Init())
+
+	// Starting the plugin will fail because the server does not accept connections.
+	// The model code should convert it to a fatal error for the agent to remove
+	// the plugin.
+	var acc testutil.Accumulator
+	err = model.Start(&acc)
+	require.ErrorContains(t, err, "connecting to \""+server.addr()+"\" failed")
+	var fatalErr *internal.FatalError
+	require.ErrorAs(t, err, &fatalErr)
+}
+
+func TestStartupErrorBehaviorRetry(t *testing.T) {
+	// Create fake S7 comm server that can accept connects
+	server, err := newMockServer()
+	require.NoError(t, err)
+	defer server.close()
+
+	// Setup the plugin and the model to be able to use the startup retry strategy
+	plugin := &S7comm{
+		Server:          server.addr(),
+		Rack:            0,
+		Slot:            2,
+		DebugConnection: true,
+		Timeout:         config.Duration(100 * time.Millisecond),
+		Configs: []metricDefinition{
+			{
+				Fields: []metricFieldDefinition{
+					{
+						Name:    "foo",
+						Address: "DB1.W2",
+					},
+				},
+			},
+		},
+		Log: &testutil.Logger{},
+	}
+	model := models.NewRunningInput(
+		plugin,
+		&models.InputConfig{
+			Name:                 "s7comm",
+			Alias:                "retry-test", // required to get a unique error stats instance
+			StartupErrorBehavior: "retry",
+		},
+	)
+	model.StartupErrors.Set(0)
+	require.NoError(t, model.Init())
+
+	// Starting the plugin will return no error because the plugin will
+	// retry to connect in every gather cycle.
+	var acc testutil.Accumulator
+	require.NoError(t, model.Start(&acc))
+
+	// The gather should fail as the server does not accept connections (yet)
+	require.Empty(t, acc.GetTelegrafMetrics())
+	require.ErrorIs(t, model.Gather(&acc), internal.ErrNotConnected)
+	require.Equal(t, int64(2), model.StartupErrors.Get())
+
+	// Allow connection in the server, now the connection should succeed
+	server.start()
+	defer model.Stop()
+	require.NoError(t, model.Gather(&acc))
+}
+
+type mockServer struct {
+	connectionAttempts atomic.Uint32
+	listener           net.Listener
+}
+
+func newMockServer() (*mockServer, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	return &mockServer{listener: l}, nil
+}
+
+func (s *mockServer) addr() string {
+	return s.listener.Addr().String()
+}
+
+func (s *mockServer) close() error {
+	if s.listener != nil {
+		return s.listener.Close()
+	}
+	return nil
+}
+
+func (s *mockServer) start() {
 	go func() {
+		defer s.listener.Close()
 		for {
-			conn, err := listener.Accept()
+			conn, err := s.listener.Accept()
 			if err != nil {
+				return
+			}
+			if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				conn.Close()
 				return
 			}
 
 			// Count the number of connection attempts
-			atomic.AddUint32(&connectionAttempts, 1)
+			s.connectionAttempts.Add(1)
 
 			buf := make([]byte, 4096)
 
@@ -756,31 +960,4 @@ func TestConnectionLoss(t *testing.T) {
 			conn.Close()
 		}
 	}()
-	plugin := &S7comm{
-		Server:          listener.Addr().String(),
-		Rack:            0,
-		Slot:            2,
-		DebugConnection: true,
-		Configs: []metricDefinition{
-			{
-				Fields: []metricFieldDefinition{
-					{
-						Name:    "foo",
-						Address: "DB1.W2",
-					},
-				},
-			},
-		},
-		Log: &testutil.Logger{},
-	}
-	require.NoError(t, plugin.Init())
-
-	var acc testutil.Accumulator
-	require.NoError(t, plugin.Start(&acc))
-	require.NoError(t, plugin.Gather(&acc))
-	require.NoError(t, plugin.Gather(&acc))
-	plugin.Stop()
-	listener.Close()
-
-	require.Equal(t, 3, int(atomic.LoadUint32(&connectionAttempts)))
 }
