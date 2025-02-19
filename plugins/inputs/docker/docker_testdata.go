@@ -8,12 +8,14 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
 )
 
-var info = types.Info{
+var info = system.Info{
 	Containers:         108,
 	ContainersRunning:  98,
 	ContainersStopped:  6,
@@ -38,15 +40,15 @@ var info = types.Info{
 		IndexConfigs: map[string]*registry.IndexInfo{
 			"docker.io": {
 				Name:     "docker.io",
-				Mirrors:  []string{},
+				Mirrors:  make([]string, 0),
 				Official: true,
 				Secure:   true,
 			},
-		}, InsecureRegistryCIDRs: []*registry.NetIPNet{{IP: []byte{127, 0, 0, 0}, Mask: []byte{255, 0, 0, 0}}}, Mirrors: []string{}},
+		}, InsecureRegistryCIDRs: []*registry.NetIPNet{{IP: []byte{127, 0, 0, 0}, Mask: []byte{255, 0, 0, 0}}}, Mirrors: make([]string, 0)},
 	OperatingSystem:  "Linux Mint LMDE (containerized)",
 	BridgeNfIptables: true,
 	HTTPSProxy:       "",
-	Labels:           []string{},
+	Labels:           make([]string, 0),
 	MemoryLimit:      false,
 	DriverStatus: [][2]string{
 		{"Pool Name", "docker-8:1-1182287-pool"},
@@ -169,7 +171,7 @@ var containerList = []types.Container{
 }
 
 var two = uint64(2)
-var ServiceList = []swarm.Service{
+var serviceList = []swarm.Service{
 	{
 		ID: "qolkls9g5iasdiuihcyz9rnx2",
 		Spec: swarm.ServiceSpec{
@@ -194,9 +196,34 @@ var ServiceList = []swarm.Service{
 			},
 		},
 	},
+	{
+		ID: "rfmqydhe8cluzl9hayyrhw5ga",
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{
+				Name: "test3",
+			},
+			Mode: swarm.ServiceMode{
+				ReplicatedJob: &swarm.ReplicatedJob{
+					MaxConcurrent:    &two,
+					TotalCompletions: &two,
+				},
+			},
+		},
+	},
+	{
+		ID: "mp50lo68vqgkory4e26ts8f9d",
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{
+				Name: "test4",
+			},
+			Mode: swarm.ServiceMode{
+				GlobalJob: &swarm.GlobalJob{},
+			},
+		},
+	},
 }
 
-var TaskList = []swarm.Task{
+var taskList = []swarm.Task{
 	{
 		ID:        "kwh0lv7hwwbh",
 		ServiceID: "qolkls9g5iasdiuihcyz9rnx2",
@@ -226,7 +253,7 @@ var TaskList = []swarm.Task{
 	},
 }
 
-var NodeList = []swarm.Node{
+var nodeList = []swarm.Node{
 	{
 		ID: "0cl4jturcyd1ks3fwpd010kor",
 		Status: swarm.NodeStatus{
@@ -241,8 +268,8 @@ var NodeList = []swarm.Node{
 	},
 }
 
-func containerStats(s string) types.ContainerStats {
-	var stat types.ContainerStats
+func containerStats(s string) container.StatsResponseReader {
+	var stat container.StatsResponseReader
 	var name string
 	switch s {
 	case "e2173b9478a6ae55e237d4d74f8bbb753f0817192b5081334dc78476296b7dfb":
@@ -368,10 +395,10 @@ func containerStats(s string) types.ContainerStats {
 	return stat
 }
 
-func testStats() *types.StatsJSON {
-	stats := &types.StatsJSON{}
+func testStats() *container.StatsResponse {
+	stats := &container.StatsResponse{}
 	stats.Read = time.Now()
-	stats.Networks = make(map[string]types.NetworkStats)
+	stats.Networks = make(map[string]container.NetworkStats)
 	stats.CPUStats.OnlineCPUs = 2
 	stats.CPUStats.CPUUsage.PercpuUsage = []uint64{1, 1002, 0, 0}
 	stats.CPUStats.CPUUsage.UsageInUsermode = 100
@@ -419,7 +446,7 @@ func testStats() *types.StatsJSON {
 	stats.MemoryStats.Failcnt = 1
 	stats.MemoryStats.Limit = 2000
 
-	stats.Networks["eth0"] = types.NetworkStats{
+	stats.Networks["eth0"] = container.NetworkStats{
 		RxDropped: 1,
 		RxBytes:   2,
 		RxErrors:  3,
@@ -430,7 +457,7 @@ func testStats() *types.StatsJSON {
 		TxBytes:   4,
 	}
 
-	stats.Networks["eth1"] = types.NetworkStats{
+	stats.Networks["eth1"] = container.NetworkStats{
 		RxDropped: 5,
 		RxBytes:   6,
 		RxErrors:  7,
@@ -441,19 +468,19 @@ func testStats() *types.StatsJSON {
 		TxBytes:   8,
 	}
 
-	sbr := types.BlkioStatEntry{
+	sbr := container.BlkioStatEntry{
 		Major: 6,
 		Minor: 0,
 		Op:    "read",
 		Value: 100,
 	}
-	sr := types.BlkioStatEntry{
+	sr := container.BlkioStatEntry{
 		Major: 6,
 		Minor: 0,
 		Op:    "write",
 		Value: 101,
 	}
-	sr2 := types.BlkioStatEntry{
+	sr2 := container.BlkioStatEntry{
 		Major: 6,
 		Minor: 1,
 		Op:    "write",
@@ -470,8 +497,8 @@ func testStats() *types.StatsJSON {
 	return stats
 }
 
-func containerStatsWindows() types.ContainerStats {
-	var stat types.ContainerStats
+func containerStatsWindows() container.StatsResponseReader {
+	var stat container.StatsResponseReader
 	jsonStat := `
 {
 	"read":"2017-01-11T08:32:46.2413794Z",
@@ -549,7 +576,7 @@ var diskUsage = types.DiskUsage{
 	Containers: []*types.Container{
 		{Names: []string{"/some_container"}, Image: "some_image:1.0.0-alpine", SizeRw: 0, SizeRootFs: 123456789},
 	},
-	Images: []*types.ImageSummary{
+	Images: []*image.Summary{
 		{ID: "sha256:some_imageid", RepoTags: []string{"some_image_tag:1.0.0-alpine"}, Size: 123456789, SharedSize: 0},
 		{ID: "sha256:7f4a1cc74046ce48cd918693cd6bf4b2683f4ce0d7be3f7148a21df9f06f5b5f", RepoTags: []string{"telegraf:latest"}, Size: 425484494, SharedSize: 0},
 	},

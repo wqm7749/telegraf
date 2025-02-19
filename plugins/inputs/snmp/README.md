@@ -18,6 +18,15 @@ See the [CONFIGURATION.md][CONFIGURATION.md] for more details.
 
 [CONFIGURATION.md]: ../../../docs/CONFIGURATION.md#plugins
 
+## Secret-store support
+
+This plugin supports secrets from secret-stores for the `auth_password` and
+`priv_password` option.
+See the [secret-store documentation][SECRETSTORE] for more details on how
+to use them.
+
+[SECRETSTORE]: ../../../docs/CONFIGURATION.md#secret-store-secrets
+
 ## SNMP backend: gosmi and netsnmp
 
 Telegraf has two backends to translate SNMP objects. By default, Telegraf will
@@ -69,6 +78,10 @@ details.
 
   ## Agent host tag; should be set to "source" for consistent usage across plugins
   ##   example: agent_host_tag = "source"
+  ## The default value is inconsistent with other plugins. Users will get a
+  ## warning that can be ignored if this is not changed. However, to have a
+  ## consistent experience, set this to "source" in your config to align with
+  ## other plugins.
   # agent_host_tag = "agent_host"
 
   ## Number of retries to attempt.
@@ -156,16 +169,16 @@ option operate similar to the `snmpget` utility.
     ##   float:       Convert the value into a float with no adjustment. Same
     ##                as `float(0)`.
     ##   int:         Convert the value into an integer.
-    ##   hwaddr:      Convert the value to a MAC address.
     ##   ipaddr:      Convert the value to an IP address.
-    ##   hextoint:X:Y Convert a hex string value to integer. Where X is the Endian
-    ##                and Y the bit size. For example: hextoint:LittleEndian:uint64
-    ##                or hextoint:BigEndian:uint32. Valid options for the Endian are:
-    ##                BigEndian and LittleEndian. For the bit size: uint16, uint32
-    ##                and uint64.
-    ##   enum(1):     Convert the value according to its syntax in the MIB (full).
-    ##                (Only supported with gosmi translator)
+    ##   hex:         Convert bytes to a hex string.
+    ##   hextoint:X:Y Convert bytes to integer, where X is the endian and Y the
+    ##                bit size. For example: hextoint:LittleEndian:uint64 or
+    ##                hextoint:BigEndian:uint32. Valid options for the endian
+    ##                are: BigEndian and LittleEndian. For the bit size: 
+    ##                uint16, uint32 and uint64.
     ##   enum:        Convert the value according to its syntax in the MIB.
+    ##                (Only supported with gosmi translator)
+    ##   displayhint: Format the value according to the textual convention in the MIB.
     ##                (Only supported with gosmi translator)
     ##
     # conversion = ""
@@ -248,7 +261,7 @@ One [metric][] is created for each row of the SNMP table.
       ## Controls if entries from secondary table should be added or not
       ## if joining index is present or not. I set to true, means that join
       ## is outer, and index is prepended with "Secondary." for missing values
-      ## to avoid overlaping indexes from both tables. Can be set per field or
+      ## to avoid overlapping indexes from both tables. Can be set per field or
       ## globally with SecondaryIndexTable, global true overrides per field false.
       # secondary_outer_join = false
 ```

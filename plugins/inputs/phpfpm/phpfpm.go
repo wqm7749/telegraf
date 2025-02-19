@@ -26,22 +26,31 @@ import (
 var sampleConfig string
 
 const (
-	PfPool               = "pool"
-	PfProcessManager     = "process manager"
-	PfStartSince         = "start since"
-	PfAcceptedConn       = "accepted conn"
-	PfListenQueue        = "listen queue"
-	PfMaxListenQueue     = "max listen queue"
-	PfListenQueueLen     = "listen queue len"
-	PfIdleProcesses      = "idle processes"
-	PfActiveProcesses    = "active processes"
-	PfTotalProcesses     = "total processes"
-	PfMaxActiveProcesses = "max active processes"
-	PfMaxChildrenReached = "max children reached"
-	PfSlowRequests       = "slow requests"
+	pfPool               = "pool"
+	pfStartSince         = "start since"
+	pfAcceptedConn       = "accepted conn"
+	pfListenQueue        = "listen queue"
+	pfMaxListenQueue     = "max listen queue"
+	pfListenQueueLen     = "listen queue len"
+	pfIdleProcesses      = "idle processes"
+	pfActiveProcesses    = "active processes"
+	pfTotalProcesses     = "total processes"
+	pfMaxActiveProcesses = "max active processes"
+	pfMaxChildrenReached = "max children reached"
+	pfSlowRequests       = "slow requests"
 )
 
-type JSONMetrics struct {
+type Phpfpm struct {
+	Format  string          `toml:"format"`
+	Timeout config.Duration `toml:"timeout"`
+	Urls    []string        `toml:"urls"`
+	Log     telegraf.Logger `toml:"-"`
+	tls.ClientConfig
+
+	client *http.Client
+}
+
+type jsonMetrics struct {
 	Pool               string `json:"pool"`
 	ProcessManager     string `json:"process manager"`
 	StartTime          int    `json:"start time"`
@@ -73,24 +82,18 @@ type JSONMetrics struct {
 	} `json:"processes"`
 }
 
-type metric map[string]int64
-type poolStat map[string]metric
+type metricStat map[string]int64
+type poolStat map[string]metricStat
 
-type phpfpm struct {
-	Format  string          `toml:"format"`
-	Timeout config.Duration `toml:"timeout"`
-	Urls    []string        `toml:"urls"`
-
-	tls.ClientConfig
-	client *http.Client
-	log    telegraf.Logger
-}
-
-func (*phpfpm) SampleConfig() string {
+func (*Phpfpm) SampleConfig() string {
 	return sampleConfig
 }
 
-func (p *phpfpm) Init() error {
+func (p *Phpfpm) Init() error {
+	if len(p.Urls) == 0 {
+		p.Urls = []string{"http://127.0.0.1/status"}
+	}
+
 	tlsCfg, err := p.ClientConfig.TLSConfig()
 	if err != nil {
 		return err
@@ -114,21 +117,9 @@ func (p *phpfpm) Init() error {
 	return nil
 }
 
-// Reads stats from all configured servers accumulates stats.
-// Returns one of the errors encountered while gather stats (if any).
-func (p *phpfpm) Gather(acc telegraf.Accumulator) error {
-	if len(p.Urls) == 0 {
-		return p.gatherServer("http://127.0.0.1/status", acc)
-	}
-
+func (p *Phpfpm) Gather(acc telegraf.Accumulator) error {
 	var wg sync.WaitGroup
-
-	urls, err := expandUrls(p.Urls)
-	if err != nil {
-		return err
-	}
-
-	for _, serv := range urls {
+	for _, serv := range expandUrls(acc, p.Urls) {
 		wg.Add(1)
 		go func(serv string) {
 			defer wg.Done()
@@ -142,7 +133,7 @@ func (p *phpfpm) Gather(acc telegraf.Accumulator) error {
 }
 
 // Request status page to get stat raw data and import it
-func (p *phpfpm) gatherServer(addr string, acc telegraf.Accumulator) error {
+func (p *Phpfpm) gatherServer(addr string, acc telegraf.Accumulator) error {
 	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
 		return p.gatherHTTP(addr, acc)
 	}
@@ -164,8 +155,11 @@ func (p *phpfpm) gatherServer(addr string, acc telegraf.Accumulator) error {
 			return fmt.Errorf("url does not follow required 'address:port' format: %s", u.Host)
 		}
 		fcgiIP := socketAddr[0]
-		fcgiPort, _ := strconv.Atoi(socketAddr[1])
-		fcgi, err = newFcgiClient(fcgiIP, fcgiPort)
+		fcgiPort, err := strconv.Atoi(socketAddr[1])
+		if err != nil {
+			return fmt.Errorf("unable to parse server port %q: %w", socketAddr[1], err)
+		}
+		fcgi, err = newFcgiClient(time.Duration(p.Timeout), fcgiIP, fcgiPort)
 		if err != nil {
 			return err
 		}
@@ -179,7 +173,7 @@ func (p *phpfpm) gatherServer(addr string, acc telegraf.Accumulator) error {
 		if statusPath == "" {
 			statusPath = "status"
 		}
-		fcgi, err = newFcgiClient("unix", socketPath)
+		fcgi, err = newFcgiClient(time.Duration(p.Timeout), "unix", socketPath)
 	}
 
 	if err != nil {
@@ -190,8 +184,8 @@ func (p *phpfpm) gatherServer(addr string, acc telegraf.Accumulator) error {
 }
 
 // Gather stat using fcgi protocol
-func (p *phpfpm) gatherFcgi(fcgi *conn, statusPath string, acc telegraf.Accumulator, addr string) error {
-	fpmOutput, fpmErr, err := fcgi.Request(map[string]string{
+func (p *Phpfpm) gatherFcgi(fcgi *conn, statusPath string, acc telegraf.Accumulator, addr string) error {
+	fpmOutput, fpmErr, err := fcgi.request(map[string]string{
 		"SCRIPT_NAME":     "/" + statusPath,
 		"SCRIPT_FILENAME": statusPath,
 		"REQUEST_METHOD":  "GET",
@@ -209,7 +203,7 @@ func (p *phpfpm) gatherFcgi(fcgi *conn, statusPath string, acc telegraf.Accumula
 }
 
 // Gather stat using http protocol
-func (p *phpfpm) gatherHTTP(addr string, acc telegraf.Accumulator) error {
+func (p *Phpfpm) gatherHTTP(addr string, acc telegraf.Accumulator) error {
 	u, err := url.Parse(addr)
 	if err != nil {
 		return fmt.Errorf("unable parse server address %q: %w", addr, err)
@@ -235,7 +229,7 @@ func (p *phpfpm) gatherHTTP(addr string, acc telegraf.Accumulator) error {
 }
 
 // Import stat data into Telegraf system
-func (p *phpfpm) importMetric(r io.Reader, acc telegraf.Accumulator, addr string) {
+func (p *Phpfpm) importMetric(r io.Reader, acc telegraf.Accumulator, addr string) {
 	if p.Format == "json" {
 		p.parseJSON(r, acc, addr)
 	} else {
@@ -257,25 +251,25 @@ func parseLines(r io.Reader, acc telegraf.Accumulator, addr string) {
 		}
 		fieldName := strings.Trim(keyvalue[0], " ")
 		// We start to gather data for a new pool here
-		if fieldName == PfPool {
+		if fieldName == pfPool {
 			currentPool = strings.Trim(keyvalue[1], " ")
-			stats[currentPool] = make(metric)
+			stats[currentPool] = make(metricStat)
 			continue
 		}
 
 		// Start to parse metric for current pool
 		switch fieldName {
-		case PfStartSince,
-			PfAcceptedConn,
-			PfListenQueue,
-			PfMaxListenQueue,
-			PfListenQueueLen,
-			PfIdleProcesses,
-			PfActiveProcesses,
-			PfTotalProcesses,
-			PfMaxActiveProcesses,
-			PfMaxChildrenReached,
-			PfSlowRequests:
+		case pfStartSince,
+			pfAcceptedConn,
+			pfListenQueue,
+			pfMaxListenQueue,
+			pfListenQueueLen,
+			pfIdleProcesses,
+			pfActiveProcesses,
+			pfTotalProcesses,
+			pfMaxActiveProcesses,
+			pfMaxChildrenReached,
+			pfSlowRequests:
 			fieldValue, err := strconv.ParseInt(strings.Trim(keyvalue[1], " "), 10, 64)
 			if err == nil {
 				stats[currentPool][fieldName] = fieldValue
@@ -297,10 +291,10 @@ func parseLines(r io.Reader, acc telegraf.Accumulator, addr string) {
 	}
 }
 
-func (p *phpfpm) parseJSON(r io.Reader, acc telegraf.Accumulator, addr string) {
-	var metrics JSONMetrics
+func (p *Phpfpm) parseJSON(r io.Reader, acc telegraf.Accumulator, addr string) {
+	var metrics jsonMetrics
 	if err := json.NewDecoder(r).Decode(&metrics); err != nil {
-		p.log.Errorf("Unable to decode JSON response: %s", err)
+		p.Log.Errorf("Unable to decode JSON response: %s", err)
 		return
 	}
 	timestamp := time.Now()
@@ -334,6 +328,7 @@ func (p *phpfpm) parseJSON(r io.Reader, acc telegraf.Accumulator, addr string) {
 			"script":         process.Script,
 		}
 		fields := map[string]any{
+			"pid":                 process.Pid,
 			"state":               process.State,
 			"start_time":          process.StartTime,
 			"requests":            process.Requests,
@@ -346,7 +341,7 @@ func (p *phpfpm) parseJSON(r io.Reader, acc telegraf.Accumulator, addr string) {
 	}
 }
 
-func expandUrls(urls []string) ([]string, error) {
+func expandUrls(acc telegraf.Accumulator, urls []string) []string {
 	addrs := make([]string, 0, len(urls))
 	for _, address := range urls {
 		if isNetworkURL(address) {
@@ -355,11 +350,12 @@ func expandUrls(urls []string) ([]string, error) {
 		}
 		paths, err := globUnixSocket(address)
 		if err != nil {
-			return nil, err
+			acc.AddError(err)
+			continue
 		}
 		addrs = append(addrs, paths...)
 	}
-	return addrs, nil
+	return addrs
 }
 
 func globUnixSocket(address string) ([]string, error) {
@@ -384,7 +380,7 @@ func globUnixSocket(address string) ([]string, error) {
 	return addresses, nil
 }
 
-func unixSocketPaths(addr string) (socketPath string, statusPath string) {
+func unixSocketPaths(addr string) (socketPath, statusPath string) {
 	socketAddr := strings.Split(addr, ":")
 	if len(socketAddr) >= 2 {
 		socketPath = socketAddr[0]
@@ -403,6 +399,6 @@ func isNetworkURL(addr string) bool {
 
 func init() {
 	inputs.Add("phpfpm", func() telegraf.Input {
-		return &phpfpm{}
+		return &Phpfpm{}
 	})
 }

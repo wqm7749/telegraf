@@ -15,7 +15,6 @@ import (
 	"github.com/influxdata/telegraf/internal/process"
 	"github.com/influxdata/telegraf/plugins/parsers/influx"
 	"github.com/influxdata/telegraf/plugins/processors"
-	"github.com/influxdata/telegraf/plugins/serializers"
 )
 
 //go:embed sample.conf
@@ -28,7 +27,7 @@ type Execd struct {
 	Log          telegraf.Logger
 
 	parser     telegraf.Parser
-	serializer serializers.Serializer
+	serializer telegraf.Serializer
 	acc        telegraf.Accumulator
 	process    *process.Process
 }
@@ -92,7 +91,7 @@ func (e *Execd) Add(m telegraf.Metric, _ telegraf.Accumulator) error {
 	// We cannot maintain tracking metrics at the moment because input/output
 	// is done asynchronously and we don't have any metric metadata to tie the
 	// output metric back to the original input metric.
-	m.Drop()
+	m.Accept()
 	return nil
 }
 

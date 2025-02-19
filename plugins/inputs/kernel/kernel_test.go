@@ -14,23 +14,13 @@ import (
 )
 
 func TestGetProcValueInt(t *testing.T) {
-	k := Kernel{
-		statFile:        "testdata/stat_file_full",
-		entropyStatFile: "testdata/entropy_stat_file_full",
-	}
-
-	d, err := k.getProcValueInt(k.entropyStatFile)
+	d, err := getProcValueInt("testdata/entropy_stat_file_full")
 	require.NoError(t, err)
 	require.IsType(t, int64(1), d)
 }
 
 func TestGetProcValueByte(t *testing.T) {
-	k := Kernel{
-		statFile:        "testdata/stat_file_full",
-		entropyStatFile: "testdata/entropy_stat_file_full",
-	}
-
-	d, err := k.getProcValueBytes(k.entropyStatFile)
+	d, err := getProcValueBytes("testdata/entropy_stat_file_full")
 	require.NoError(t, err)
 	require.IsType(t, []byte("test"), d)
 }
@@ -200,7 +190,7 @@ func TestKSMEnabledWrongDir(t *testing.T) {
 		ConfigCollect: []string{"ksm"},
 	}
 
-	require.ErrorContains(t, k.Init(), "Is KSM enabled in this kernel?")
+	require.ErrorContains(t, k.Init(), "KSM is not enabled in this kernel")
 }
 
 func TestKSMDisabledNoKSMTags(t *testing.T) {
@@ -208,7 +198,6 @@ func TestKSMDisabledNoKSMTags(t *testing.T) {
 		statFile:        "testdata/stat_file_full",
 		entropyStatFile: "testdata/entropy_stat_file_full",
 		ksmStatsDir:     "testdata/this_file_does_not_exist",
-		ConfigCollect:   []string{},
 	}
 
 	acc := testutil.Accumulator{}

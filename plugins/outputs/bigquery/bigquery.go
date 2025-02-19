@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -87,14 +88,14 @@ func (s *BigQuery) Connect() error {
 func (s *BigQuery) setUpDefaultClient() error {
 	var credentialsOption option.ClientOption
 
+	// https://cloud.google.com/go/docs/reference/cloud.google.com/go/0.94.1#hdr-Timeouts_and_Cancellation
+	// Do not attempt to add timeout to this context for the bigquery client.
 	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.Timeout))
-	defer cancel()
 
 	if s.CredentialsFile != "" {
 		credentialsOption = option.WithCredentialsFile(s.CredentialsFile)
 	} else {
-		creds, err := google.FindDefaultCredentials(ctx)
+		creds, err := google.FindDefaultCredentials(ctx, bigquery.Scope)
 		if err != nil {
 			return fmt.Errorf(
 				"unable to find Google Cloud Platform Application Default Credentials: %w. "+
@@ -117,7 +118,7 @@ func (s *BigQuery) Write(metrics []telegraf.Metric) error {
 		return s.writeCompact(metrics)
 	}
 
-	groupedMetrics := s.groupByMetricName(metrics)
+	groupedMetrics := groupByMetricName(metrics)
 
 	var wg sync.WaitGroup
 
@@ -154,7 +155,7 @@ func (s *BigQuery) writeCompact(metrics []telegraf.Metric) error {
 	return inserter.Put(ctx, compactValues)
 }
 
-func (s *BigQuery) groupByMetricName(metrics []telegraf.Metric) map[string][]bigquery.ValueSaver {
+func groupByMetricName(metrics []telegraf.Metric) map[string][]bigquery.ValueSaver {
 	groupedMetrics := make(map[string][]bigquery.ValueSaver)
 
 	for _, m := range metrics {
@@ -187,7 +188,18 @@ func (s *BigQuery) newCompactValuesSaver(m telegraf.Metric) (*bigquery.ValuesSav
 		return nil, fmt.Errorf("serializing tags: %w", err)
 	}
 
-	fields, err := json.Marshal(m.Fields())
+	rawFields := make(map[string]interface{}, len(m.FieldList()))
+	for _, field := range m.FieldList() {
+		if fv, ok := field.Value.(float64); ok {
+			// JSON does not support these special values
+			if math.IsNaN(fv) || math.IsInf(fv, 0) {
+				s.Log.Debugf("Ignoring unsupported field %s with value %q for metric %s", field.Key, field.Value, m.Name())
+				continue
+			}
+		}
+		rawFields[field.Key] = field.Value
+	}
+	fields, err := json.Marshal(rawFields)
 	if err != nil {
 		return nil, fmt.Errorf("serializing fields: %w", err)
 	}

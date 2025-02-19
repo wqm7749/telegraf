@@ -62,7 +62,7 @@ func (s *mockMetricServer) CreateTimeSeries(ctx context.Context, req *monitoring
 	if s.err != nil {
 		var statusResp *status.Status
 		switch s.err.Error() {
-		case "InvalidArgument":
+		case "invalid argument":
 			statusResp = status.New(codes.InvalidArgument, s.err.Error())
 		default:
 			statusResp = status.New(codes.Unknown, s.err.Error())
@@ -85,7 +85,7 @@ func TestMain(m *testing.M) {
 	go serv.Serve(lis) //nolint:errcheck // Ignore the returned error as the tests will fail anyway
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
-	conn, err := grpc.Dial(lis.Addr().String(), opt)
+	conn, err := grpc.NewClient(lis.Addr().String(), opt)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestWrite(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:   fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:   "projects/" + "[PROJECT]",
 		Namespace: "test",
 		Log:       testutil.Logger{},
 		client:    c,
@@ -134,7 +134,7 @@ func TestWriteResourceTypeAndLabels(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:      fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:      "projects/" + "[PROJECT]",
 		Namespace:    "test",
 		ResourceType: "foo",
 		ResourceLabels: map[string]string{
@@ -167,7 +167,7 @@ func TestWriteTagsAsResourceLabels(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:              fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:              "projects/" + "[PROJECT]",
 		Namespace:            "test",
 		ResourceType:         "foo",
 		TagsAsResourceLabels: []string{"job_name"},
@@ -231,7 +231,7 @@ func TestWriteMetricTypesOfficial(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:   fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:   "projects/" + "[PROJECT]",
 		Namespace: "test",
 		ResourceLabels: map[string]string{
 			"mylabel": "myvalue",
@@ -307,7 +307,7 @@ func TestWriteMetricTypesPath(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:   fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:   "projects/" + "[PROJECT]",
 		Namespace: "test",
 		ResourceLabels: map[string]string{
 			"mylabel": "myvalue",
@@ -367,7 +367,7 @@ func TestWriteAscendingTime(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:   fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:   "projects/" + "[PROJECT]",
 		Namespace: "test",
 		Log:       testutil.Logger{},
 		client:    c,
@@ -401,31 +401,34 @@ func TestWriteAscendingTime(t *testing.T) {
 	require.Len(t, request.TimeSeries, 1)
 	ts := request.TimeSeries[0]
 	require.Len(t, ts.Points, 1)
-	require.Equal(t, ts.Points[0].Interval, &monitoringpb.TimeInterval{
-		EndTime: &timestamppb.Timestamp{
-			Seconds: 1,
-		},
-	})
-	require.Equal(t, ts.Points[0].Value, &monitoringpb.TypedValue{
-		Value: &monitoringpb.TypedValue_Int64Value{
-			Int64Value: int64(43),
-		},
-	})
+	require.Equal(t,
+		&monitoringpb.TimeInterval{
+			EndTime: &timestamppb.Timestamp{
+				Seconds: 1,
+			},
+		}, ts.Points[0].Interval)
+	require.Equal(t,
+		&monitoringpb.TypedValue{
+			Value: &monitoringpb.TypedValue_Int64Value{
+				Int64Value: int64(43),
+			},
+		}, ts.Points[0].Value)
 
 	request = mockMetric.reqs[1].(*monitoringpb.CreateTimeSeriesRequest)
 	require.Len(t, request.TimeSeries, 1)
 	ts = request.TimeSeries[0]
 	require.Len(t, ts.Points, 1)
-	require.Equal(t, ts.Points[0].Interval, &monitoringpb.TimeInterval{
-		EndTime: &timestamppb.Timestamp{
-			Seconds: 2,
-		},
-	})
-	require.Equal(t, ts.Points[0].Value, &monitoringpb.TypedValue{
+	require.Equal(t,
+		&monitoringpb.TimeInterval{
+			EndTime: &timestamppb.Timestamp{
+				Seconds: 2,
+			},
+		}, ts.Points[0].Interval)
+	require.Equal(t, &monitoringpb.TypedValue{
 		Value: &monitoringpb.TypedValue_Int64Value{
 			Int64Value: int64(42),
 		},
-	})
+	}, ts.Points[0].Value)
 }
 
 func TestWriteBatchable(t *testing.T) {
@@ -440,7 +443,7 @@ func TestWriteBatchable(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:   fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:   "projects/" + "[PROJECT]",
 		Namespace: "test",
 		Log:       testutil.Logger{},
 		client:    c,
@@ -534,29 +537,33 @@ func TestWriteBatchable(t *testing.T) {
 	require.Len(t, request.TimeSeries, 2)
 	ts := request.TimeSeries[0]
 	require.Len(t, ts.Points, 1)
-	require.Equal(t, ts.Points[0].Interval, &monitoringpb.TimeInterval{
-		EndTime: &timestamppb.Timestamp{
-			Seconds: 1,
-		},
-	})
-	require.Equal(t, ts.Points[0].Value, &monitoringpb.TypedValue{
-		Value: &monitoringpb.TypedValue_Int64Value{
-			Int64Value: int64(43),
-		},
-	})
+	require.Equal(t,
+		&monitoringpb.TimeInterval{
+			EndTime: &timestamppb.Timestamp{
+				Seconds: 1,
+			},
+		}, ts.Points[0].Interval)
+	require.Equal(t,
+		&monitoringpb.TypedValue{
+			Value: &monitoringpb.TypedValue_Int64Value{
+				Int64Value: int64(43),
+			},
+		}, ts.Points[0].Value)
 
 	ts = request.TimeSeries[1]
 	require.Len(t, ts.Points, 1)
-	require.Equal(t, ts.Points[0].Interval, &monitoringpb.TimeInterval{
-		EndTime: &timestamppb.Timestamp{
-			Seconds: 1,
-		},
-	})
-	require.Equal(t, ts.Points[0].Value, &monitoringpb.TypedValue{
-		Value: &monitoringpb.TypedValue_Int64Value{
-			Int64Value: int64(43),
-		},
-	})
+	require.Equal(t,
+		&monitoringpb.TimeInterval{
+			EndTime: &timestamppb.Timestamp{
+				Seconds: 1,
+			},
+		}, ts.Points[0].Interval)
+	require.Equal(t,
+		&monitoringpb.TypedValue{
+			Value: &monitoringpb.TypedValue_Int64Value{
+				Int64Value: int64(43),
+			},
+		}, ts.Points[0].Value)
 
 	// Request 2 with 1 time series
 	request = mockMetric.reqs[1].(*monitoringpb.CreateTimeSeriesRequest)
@@ -609,12 +616,12 @@ func TestWriteIgnoredErrors(t *testing.T) {
 	}{
 		{
 			name:        "other errors reported",
-			err:         errors.New("Unknown"),
+			err:         errors.New("unknown"),
 			expectedErr: true,
 		},
 		{
 			name:        "invalid argument",
-			err:         errors.New("InvalidArgument"),
+			err:         errors.New("invalid argument"),
 			expectedErr: false,
 		},
 	}
@@ -629,7 +636,7 @@ func TestWriteIgnoredErrors(t *testing.T) {
 			}
 
 			s := &Stackdriver{
-				Project:   fmt.Sprintf("projects/%s", "[PROJECT]"),
+				Project:   "projects/" + "[PROJECT]",
 				Namespace: "test",
 				Log:       testutil.Logger{},
 				client:    c,
@@ -706,7 +713,7 @@ func TestGetStackdriverIntervalEndpoints(t *testing.T) {
 	}
 
 	s := &Stackdriver{
-		Project:      fmt.Sprintf("projects/%s", "[PROJECT]"),
+		Project:      "projects/" + "[PROJECT]",
 		Namespace:    "test",
 		Log:          testutil.Logger{},
 		client:       c,
@@ -1106,10 +1113,6 @@ func TestGenerateHistogramName(t *testing.T) {
 }
 
 func TestBuildHistogram(t *testing.T) {
-	s := &Stackdriver{
-		MetricNameFormat: "official",
-		Log:              testutil.Logger{},
-	}
 	m := testutil.MustMetric(
 		"http_server_duration",
 		map[string]string{},
@@ -1125,13 +1128,13 @@ func TestBuildHistogram(t *testing.T) {
 		},
 		time.Unix(0, 0),
 	)
-	value, err := s.buildHistogram(m)
+	value, err := buildHistogram(m)
 	require.NoError(t, err)
 
 	dist := value.GetDistributionValue()
 	require.NotNil(t, dist)
 	require.Equal(t, int64(2), dist.Count)
-	require.Equal(t, 0.5, dist.Mean)
+	require.InDelta(t, 0.5, dist.Mean, testutil.DefaultDelta)
 	require.Len(t, dist.BucketCounts, 5)
 	require.Equal(t, []int64{0, 1, 0, 1, 1}, dist.BucketCounts)
 	require.Len(t, dist.BucketOptions.GetExplicitBuckets().Bounds, 4)

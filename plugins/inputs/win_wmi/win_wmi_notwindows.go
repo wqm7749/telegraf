@@ -17,15 +17,15 @@ type Wmi struct {
 	Log telegraf.Logger `toml:"-"`
 }
 
+func (*Wmi) SampleConfig() string { return sampleConfig }
+
 func (w *Wmi) Init() error {
-	w.Log.Warn("current platform is not supported")
+	w.Log.Warn("Current platform is not supported")
 	return nil
 }
-func (w *Wmi) SampleConfig() string                { return sampleConfig }
-func (w *Wmi) Gather(_ telegraf.Accumulator) error { return nil }
+
+func (*Wmi) Gather(telegraf.Accumulator) error { return nil }
 
 func init() {
-	inputs.Add("win_wmi", func() telegraf.Input {
-		return &Wmi{}
-	})
+	inputs.Add("win_wmi", func() telegraf.Input { return &Wmi{} })
 }

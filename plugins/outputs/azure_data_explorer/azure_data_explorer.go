@@ -20,7 +20,6 @@ import (
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/internal/choice"
 	"github.com/influxdata/telegraf/plugins/outputs"
-	"github.com/influxdata/telegraf/plugins/serializers"
 	"github.com/influxdata/telegraf/plugins/serializers/json"
 )
 
@@ -36,7 +35,7 @@ type AzureDataExplorer struct {
 	TableName       string          `toml:"table_name"`
 	CreateTables    bool            `toml:"create_tables"`
 	IngestionType   string          `toml:"ingestion_type"`
-	serializer      serializers.Serializer
+	serializer      telegraf.Serializer
 	kustoClient     *kusto.Client
 	metricIngestors map[string]ingest.Ingestor
 }
@@ -133,7 +132,7 @@ func (adx *AzureDataExplorer) writeTablePerMetric(metrics []telegraf.Metric) err
 }
 
 func (adx *AzureDataExplorer) writeSingleTable(metrics []telegraf.Metric) error {
-	//serialise each metric in metrics - store in byte[]
+	// serialise each metric in metrics - store in byte[]
 	metricsArray := make([]byte, 0)
 	for _, m := range metrics {
 		metricsInBytes, err := adx.serializer.Serialize(m)
@@ -147,7 +146,7 @@ func (adx *AzureDataExplorer) writeSingleTable(metrics []telegraf.Metric) error 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(adx.Timeout))
 	defer cancel()
 
-	//push metrics to a single table
+	// push metrics to a single table
 	format := ingest.FileFormat(ingest.JSON)
 	err := adx.pushMetrics(ctx, format, adx.TableName, metricsArray)
 	return err
@@ -165,7 +164,7 @@ func (adx *AzureDataExplorer) pushMetrics(ctx context.Context, format ingest.Fil
 	length := len(metricsArray)
 	adx.Log.Debugf("Writing %d metrics to table %q", length, tableName)
 	reader := bytes.NewReader(metricsArray)
-	mapping := ingest.IngestionMappingRef(fmt.Sprintf("%s_mapping", tableName), ingest.JSON)
+	mapping := ingest.IngestionMappingRef(tableName+"_mapping", ingest.JSON)
 	if metricIngestor != nil {
 		if _, err := metricIngestor.FromReader(ctx, reader, format, mapping); err != nil {
 			adx.Log.Errorf("sending ingestion request to Azure Data Explorer for table %q failed: %v", tableName, err)
@@ -181,7 +180,7 @@ func (adx *AzureDataExplorer) getMetricIngestor(ctx context.Context, tableName s
 		if err := adx.createAzureDataExplorerTable(ctx, tableName); err != nil {
 			return nil, fmt.Errorf("creating table for %q failed: %w", tableName, err)
 		}
-		//create a new ingestor client for the table
+		// create a new ingestor client for the table
 		tempIngestor, err := createIngestorByTable(adx.kustoClient, adx.Database, tableName, adx.IngestionType)
 		if err != nil {
 			return nil, fmt.Errorf("creating ingestor for %q failed: %w", tableName, err)
@@ -256,7 +255,7 @@ func init() {
 }
 
 // For each table create the ingestor
-func createIngestorByTable(client *kusto.Client, database string, tableName string, ingestionType string) (ingest.Ingestor, error) {
+func createIngestorByTable(client *kusto.Client, database, tableName, ingestionType string) (ingest.Ingestor, error) {
 	switch strings.ToLower(ingestionType) {
 	case managedIngestion:
 		mi, err := ingest.NewManaged(client, database, tableName)

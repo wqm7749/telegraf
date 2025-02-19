@@ -2,6 +2,7 @@ package opcua_listener
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -11,25 +12,27 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
+	opcuaclient "github.com/influxdata/telegraf/plugins/common/opcua"
 	"github.com/influxdata/telegraf/plugins/common/opcua/input"
 )
 
-type SubscribeClientConfig struct {
+type subscribeClientConfig struct {
 	input.InputClientConfig
 	SubscriptionInterval config.Duration `toml:"subscription_interval"`
+	ConnectFailBehavior  string          `toml:"connect_fail_behavior"`
 }
 
-type SubscribeClient struct {
+type subscribeClient struct {
 	*input.OpcUAInputClient
-	Config SubscribeClientConfig
+	Config subscribeClientConfig
 
 	sub                *opcua.Subscription
 	monitoredItemsReqs []*ua.MonitoredItemCreateRequest
 	dataNotifications  chan *opcua.PublishNotificationData
 	metrics            chan telegraf.Metric
 
-	processingCtx    context.Context
-	processingCancel context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func checkDataChangeFilterParameters(params *input.DataChangeFilter) error {
@@ -42,9 +45,9 @@ func checkDataChangeFilterParameters(params *input.DataChangeFilter) error {
 		params.DeadbandType != input.Percent:
 		return fmt.Errorf("deadband_type '%s' not supported", params.DeadbandType)
 	case params.DeadbandValue == nil:
-		return fmt.Errorf("deadband_value was not set")
+		return errors.New("deadband_value was not set")
 	case *params.DeadbandValue < 0:
-		return fmt.Errorf("negative deadband_value not supported")
+		return errors.New("negative deadband_value not supported")
 	default:
 		return nil
 	}
@@ -78,7 +81,7 @@ func assignConfigValuesToRequest(req *ua.MonitoredItemCreateRequest, monParams *
 	return nil
 }
 
-func (sc *SubscribeClientConfig) CreateSubscribeClient(log telegraf.Logger) (*SubscribeClient, error) {
+func (sc *subscribeClientConfig) createSubscribeClient(log telegraf.Logger) (*subscribeClient, error) {
 	client, err := sc.InputClientConfig.CreateInputClient(log)
 	if err != nil {
 		return nil, err
@@ -88,7 +91,8 @@ func (sc *SubscribeClientConfig) CreateSubscribeClient(log telegraf.Logger) (*Su
 		return nil, err
 	}
 
-	subClient := &SubscribeClient{
+	processingCtx, processingCancel := context.WithCancel(context.Background())
+	subClient := &subscribeClient{
 		OpcUAInputClient:   client,
 		Config:             *sc,
 		monitoredItemsReqs: make([]*ua.MonitoredItemCreateRequest, len(client.NodeIDs)),
@@ -97,6 +101,8 @@ func (sc *SubscribeClientConfig) CreateSubscribeClient(log telegraf.Logger) (*Su
 		// the same time. It could be made dependent on the number of nodes subscribed to and the subscription interval.
 		dataNotifications: make(chan *opcua.PublishNotificationData, 100),
 		metrics:           make(chan telegraf.Metric, 100),
+		ctx:               processingCtx,
+		cancel:            processingCancel,
 	}
 
 	log.Debugf("Creating monitored items")
@@ -112,14 +118,14 @@ func (sc *SubscribeClientConfig) CreateSubscribeClient(log telegraf.Logger) (*Su
 	return subClient, nil
 }
 
-func (o *SubscribeClient) Connect() error {
-	err := o.OpcUAClient.Connect()
+func (o *subscribeClient) connect() error {
+	err := o.OpcUAClient.Connect(o.ctx)
 	if err != nil {
 		return err
 	}
 
 	o.Log.Debugf("Creating OPC UA subscription")
-	o.sub, err = o.Client.Subscribe(&opcua.SubscriptionParameters{
+	o.sub, err = o.Client.Subscribe(o.ctx, &opcua.SubscriptionParameters{
 		Interval: time.Duration(o.Config.SubscriptionInterval),
 	}, o.dataNotifications)
 	if err != nil {
@@ -131,50 +137,64 @@ func (o *SubscribeClient) Connect() error {
 	return nil
 }
 
-func (o *SubscribeClient) Stop(ctx context.Context) <-chan struct{} {
+func (o *subscribeClient) stop(ctx context.Context) <-chan struct{} {
 	o.Log.Debugf("Stopping OPC subscription...")
+	if o.State() != opcuaclient.Connected {
+		return nil
+	}
 	if o.sub != nil {
 		if err := o.sub.Cancel(ctx); err != nil {
 			o.Log.Warn("Cancelling OPC UA subscription failed with error ", err)
 		}
 	}
 	closing := o.OpcUAInputClient.Stop(ctx)
-	o.processingCancel()
+	o.cancel()
 	return closing
 }
 
-func (o *SubscribeClient) CurrentValues() ([]telegraf.Metric, error) {
-	return []telegraf.Metric{}, nil
-}
-
-func (o *SubscribeClient) StartStreamValues(ctx context.Context) (<-chan telegraf.Metric, error) {
-	err := o.Connect()
+func (o *subscribeClient) startStreamValues(ctx context.Context) (<-chan telegraf.Metric, error) {
+	err := o.connect()
 	if err != nil {
+		switch o.Config.ConnectFailBehavior {
+		case "retry":
+			o.Log.Warnf("Failed to connect to OPC UA server %s. Will attempt to connect again at the next interval: %s", o.Config.Endpoint, err)
+			return nil, nil
+		case "ignore":
+			o.Log.Errorf("Failed to connect to OPC UA server %s. Will not retry: %s", o.Config.Endpoint, err)
+			return nil, nil
+		}
 		return nil, err
 	}
 
-	resp, err := o.sub.MonitorWithContext(ctx, ua.TimestampsToReturnBoth, o.monitoredItemsReqs...)
+	resp, err := o.sub.Monitor(ctx, ua.TimestampsToReturnBoth, o.monitoredItemsReqs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start monitoring items: %w", err)
 	}
 	o.Log.Debug("Monitoring items")
 
-	for _, res := range resp.Results {
+	for idx, res := range resp.Results {
 		if !o.StatusCodeOK(res.StatusCode) {
+			// Verify NodeIDs array has been built before trying to get item; otherwise show '?' for node id
+			if len(o.OpcUAInputClient.NodeIDs) > idx {
+				o.Log.Debugf("Failed to create monitored item for node %v (%v)",
+					o.OpcUAInputClient.NodeMetricMapping[idx].Tag.FieldName, o.OpcUAInputClient.NodeIDs[idx].String())
+			} else {
+				o.Log.Debugf("Failed to create monitored item for node %v (%v)", o.OpcUAInputClient.NodeMetricMapping[idx].Tag.FieldName, '?')
+			}
+
 			return nil, fmt.Errorf("creating monitored item failed with status code: %w", res.StatusCode)
 		}
 	}
 
-	o.processingCtx, o.processingCancel = context.WithCancel(context.Background())
 	go o.processReceivedNotifications()
 
 	return o.metrics, nil
 }
 
-func (o *SubscribeClient) processReceivedNotifications() {
+func (o *subscribeClient) processReceivedNotifications() {
 	for {
 		select {
-		case <-o.processingCtx.Done():
+		case <-o.ctx.Done():
 			o.Log.Debug("Processing received notifications stopped")
 			return
 

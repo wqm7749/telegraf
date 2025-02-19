@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -54,12 +55,12 @@ func (l *Logzio) Connect() error {
 	l.Log.Debug("Connecting to logz.io output...")
 
 	if l.Token.Empty() {
-		return fmt.Errorf("token is required")
+		return errors.New("token is required")
 	}
 	if equal, err := l.Token.EqualTo([]byte("your logz.io token")); err != nil {
 		return err
 	} else if equal {
-		return fmt.Errorf("please replace 'token' with your actual token")
+		return errors.New("please replace 'token' with your actual token")
 	}
 
 	tlsCfg, err := l.ClientConfig.TLSConfig()
@@ -93,7 +94,7 @@ func (l *Logzio) Write(metrics []telegraf.Metric) error {
 	var buff bytes.Buffer
 	gz := gzip.NewWriter(&buff)
 	for _, metric := range metrics {
-		m := l.parseMetric(metric)
+		m := parseMetric(metric)
 
 		serialized, err := json.Marshal(m)
 		if err != nil {
@@ -150,7 +151,7 @@ func (l *Logzio) authURL() (string, error) {
 	return fmt.Sprintf("%s/?token=%s", l.URL, token.TemporaryString()), nil
 }
 
-func (l *Logzio) parseMetric(metric telegraf.Metric) *Metric {
+func parseMetric(metric telegraf.Metric) *Metric {
 	return &Metric{
 		Metric: map[string]interface{}{
 			metric.Name(): metric.Fields(),

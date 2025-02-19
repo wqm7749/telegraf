@@ -3,6 +3,7 @@ package starlark
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 
 	"go.starlark.net/starlark"
@@ -26,14 +27,12 @@ func (*Starlark) SampleConfig() string {
 }
 
 func (s *Starlark) Init() error {
-	err := s.Common.Init()
-	if err != nil {
+	if err := s.Common.Init(); err != nil {
 		return err
 	}
 
 	// The source should define an apply function.
-	err = s.AddFunction("apply", &common.Metric{})
-	if err != nil {
+	if err := s.AddFunction("apply", &common.Metric{}); err != nil {
 		return err
 	}
 
@@ -43,24 +42,24 @@ func (s *Starlark) Init() error {
 	return nil
 }
 
-func (s *Starlark) Start(_ telegraf.Accumulator) error {
+func (*Starlark) Start(telegraf.Accumulator) error {
 	return nil
 }
 
 func (s *Starlark) Add(origMetric telegraf.Metric, acc telegraf.Accumulator) error {
 	parameters, found := s.GetParameters("apply")
 	if !found {
-		return fmt.Errorf("the parameters of the apply function could not be found")
+		return errors.New("the parameters of the apply function could not be found")
 	}
 	parameters[0].(*common.Metric).Wrap(origMetric)
 
-	rv, err := s.Call("apply")
+	returnValue, err := s.Call("apply")
 	if err != nil {
 		s.LogError(err)
 		return err
 	}
 
-	switch rv := rv.(type) {
+	switch rv := returnValue.(type) {
 	case *starlark.List:
 		iter := rv.Iterate()
 		defer iter.Done()
@@ -77,7 +76,7 @@ func (s *Starlark) Add(origMetric telegraf.Metric, acc telegraf.Accumulator) err
 
 				// Previous metric was found, accept the starlark metric, add
 				// the original metric to the accumulator
-				if v.ID == origMetric.HashID() {
+				if v.ID != 0 {
 					origFound = true
 					s.results = append(s.results, origMetric)
 					acc.AddMetric(origMetric)
@@ -106,7 +105,7 @@ func (s *Starlark) Add(origMetric telegraf.Metric, acc telegraf.Accumulator) err
 		m := rv.Unwrap()
 		// If we got the original metric back, use that and drop the new one.
 		// Otherwise mark the original as accepted and use the new metric.
-		if origMetric.HashID() == rv.ID {
+		if rv.ID != 0 {
 			acc.AddMetric(origMetric)
 		} else {
 			origMetric.Accept()
@@ -117,11 +116,11 @@ func (s *Starlark) Add(origMetric telegraf.Metric, acc telegraf.Accumulator) err
 	default:
 		return fmt.Errorf("invalid type returned: %T", rv)
 	}
+
 	return nil
 }
 
-func (s *Starlark) Stop() {
-}
+func (*Starlark) Stop() {}
 
 func containsMetric(metrics []telegraf.Metric, target telegraf.Metric) bool {
 	for _, m := range metrics {

@@ -1,10 +1,14 @@
 # ClickHouse Input Plugin
 
-This plugin gathers the statistic data from
-[ClickHouse](https://github.com/ClickHouse/ClickHouse) server.
-
-User's on Clickhouse Cloud will not see the Zookeeper metrics as they may not
+This plugin gathers statistics data from a [ClickHouse server][clickhouse].
+Users on Clickhouse Cloud will not see the Zookeeper metrics as they may not
 have permissions to query those tables.
+
+⭐ Telegraf v1.14.0
+🏷️ server
+💻 all
+
+[clickhouse]: https://github.com/ClickHouse/ClickHouse
 
 ## Global configuration options <!-- @/docs/includes/plugin_config.md -->
 
@@ -67,7 +71,7 @@ See the [CONFIGURATION.md][CONFIGURATION.md] for more details.
   ##          <replica><host>clickhouse-eu-1.local</host><port>9000</port></replica>
   ##          <replica><host>clickhouse-eu-2.local</host><port>9000</port></replica>
   ##        </shard>
-  ##    </my-onw-cluster>
+  ##    </my-own-cluster>
   ##  </remote_servers>
   ##
   ## </yandex>
