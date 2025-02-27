@@ -160,25 +160,27 @@ const sampleStatusResponse = `
             }
         ]
     }
-}
-`
+}`
 
 func TestNginxPlusGeneratesMetrics(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var rsp string
+		if r.URL.Path != "/status" {
+			w.WriteHeader(http.StatusInternalServerError)
+			t.Errorf("Cannot handle request, expected: %q, actual: %q", "/status", r.URL.Path)
+			return
+		}
 
-		require.Equal(t, "/status", r.URL.Path, "Cannot handle request")
-
-		rsp = sampleStatusResponse
 		w.Header()["Content-Type"] = []string{"application/json"}
-
-		_, err := fmt.Fprintln(w, rsp)
-		require.NoError(t, err)
+		if _, err := fmt.Fprintln(w, sampleStatusResponse); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			t.Error(err)
+			return
+		}
 	}))
 	defer ts.Close()
 
 	n := &NginxSTS{
-		Urls: []string{fmt.Sprintf("%s/status", ts.URL)},
+		Urls: []string{ts.URL + "/status"},
 	}
 
 	var acc testutil.Accumulator

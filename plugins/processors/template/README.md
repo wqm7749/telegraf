@@ -7,6 +7,7 @@ routing option.
 
 The template has access to each metric's measurement name, tags, fields, and
 timestamp using the [interface in `/template_metric.go`](template_metric.go).
+[Sprig](http://masterminds.github.io/sprig/) helper functions are available.
 
 Read the full [Go Template Documentation][].
 
@@ -86,7 +87,7 @@ See the [CONFIGURATION.md][CONFIGURATION.md] for more details.
 
 ### Add all fields as a tag
 
-Sometimes it is usefull to pass all fields with their values into a single
+Sometimes it is useful to pass all fields with their values into a single
 message for sending it to a monitoring system (e.g. Syslog, GroundWork), then
 you can use `.Fields` or `.Tags`:
 

@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/metric"
 	"github.com/influxdata/telegraf/plugins/parsers/influx"
 	"github.com/influxdata/telegraf/plugins/processors"
 	"github.com/influxdata/telegraf/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 func TestInit(t *testing.T) {
@@ -162,7 +163,7 @@ func TestCasesTracking(t *testing.T) {
 			testutil.RequireMetricsEqual(t, expected, actual)
 
 			// Simulate output acknowledging delivery
-			for _, m := range input {
+			for _, m := range actual {
 				m.Accept()
 			}
 
@@ -170,7 +171,7 @@ func TestCasesTracking(t *testing.T) {
 			require.Eventuallyf(t, func() bool {
 				mu.Lock()
 				defer mu.Unlock()
-				return len(expected) == len(delivered)
+				return len(input) == len(delivered)
 			}, time.Second, 100*time.Millisecond, "%d delivered but %d expected", len(delivered), len(expected))
 		})
 	}

@@ -33,14 +33,6 @@ const (
 	pluginName         = "intel_pmt"
 )
 
-type pmtFileInfo []fileInfo
-
-type fileInfo struct {
-	path     string
-	numaNode string
-	pciBdf   string // PCI Bus:Device.Function (BDF)
-}
-
 type IntelPMT struct {
 	PmtSpec        string          `toml:"spec"`
 	DatatypeFilter []string        `toml:"datatypes_enabled"`
@@ -56,12 +48,18 @@ type IntelPMT struct {
 	pmtTransformations     map[string]map[string]transformation
 }
 
-// SampleConfig returns a sample configuration (See sample.conf).
-func (p *IntelPMT) SampleConfig() string {
+type pmtFileInfo []fileInfo
+
+type fileInfo struct {
+	path     string
+	numaNode string
+	pciBdf   string // PCI Bus:Device.Function (BDF)
+}
+
+func (*IntelPMT) SampleConfig() string {
 	return sampleConfig
 }
 
-// Init performs one time setup of the plugin
 func (p *IntelPMT) Init() error {
 	err := p.checkPmtSpec()
 	if err != nil {
@@ -76,7 +74,6 @@ func (p *IntelPMT) Init() error {
 	return p.parseXMLs()
 }
 
-// Gather collects the plugin's metrics.
 func (p *IntelPMT) Gather(acc telegraf.Accumulator) error {
 	var wg sync.WaitGroup
 	var hasError atomic.Bool
@@ -299,7 +296,7 @@ func getTelemSample(s sample, buf []byte, offset uint64) (uint64, error) {
 // Returns:
 //
 //	error - error if getting values has failed, if sample IDref is missing or if equation evaluation has failed.
-func (p *IntelPMT) aggregateSamples(acc telegraf.Accumulator, guid string, data []byte, numaNode string, pciBdf string) error {
+func (p *IntelPMT) aggregateSamples(acc telegraf.Accumulator, guid string, data []byte, numaNode, pciBdf string) error {
 	results, err := p.getSampleValues(guid, data)
 	if err != nil {
 		return err
@@ -384,7 +381,7 @@ func eval(eq string, params map[string]interface{}) (interface{}, error) {
 	// gval doesn't support hexadecimals
 	eq = hexToDecRegex.ReplaceAllStringFunc(eq, hexToDec)
 	if eq == "" {
-		return nil, fmt.Errorf("error during hex to decimal conversion")
+		return nil, errors.New("error during hex to decimal conversion")
 	}
 	result, err := gval.Evaluate(eq, params)
 	if err != nil {

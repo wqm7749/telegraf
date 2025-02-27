@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/influxdata/telegraf"
@@ -86,6 +87,9 @@ func (a *NebiusCloudMonitoring) Init() error {
 	if a.service == "" {
 		a.service = "custom"
 	}
+	if service := os.Getenv("NEBIUS_SERVICE"); service != "" {
+		a.service = service
+	}
 	if a.metadataTokenURL == "" {
 		a.metadataTokenURL = defaultMetadataTokenURL
 	}
@@ -99,7 +103,7 @@ func (a *NebiusCloudMonitoring) Init() error {
 		},
 		Timeout: time.Duration(a.Timeout),
 	}
-	tags := map[string]string{}
+	tags := make(map[string]string)
 	a.MetricOutsideWindow = selfstat.Register("nebius_cloud_monitoring", "metric_outside_window", tags)
 	return nil
 }
@@ -107,7 +111,7 @@ func (a *NebiusCloudMonitoring) Init() error {
 // Connect initializes the plugin and validates connectivity
 func (a *NebiusCloudMonitoring) Connect() error {
 	a.Log.Debugf("Getting folder ID in %s", a.metadataFolderURL)
-	body, err := a.getResponseFromMetadata(a.client, a.metadataFolderURL)
+	body, err := getResponseFromMetadata(a.client, a.metadataFolderURL)
 	if err != nil {
 		return err
 	}
@@ -162,7 +166,7 @@ func (a *NebiusCloudMonitoring) Write(metrics []telegraf.Metric) error {
 	return a.send(body)
 }
 
-func (a *NebiusCloudMonitoring) getResponseFromMetadata(c *http.Client, metadataURL string) ([]byte, error) {
+func getResponseFromMetadata(c *http.Client, metadataURL string) ([]byte, error) {
 	req, err := http.NewRequest("GET", metadataURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
@@ -187,7 +191,7 @@ func (a *NebiusCloudMonitoring) getResponseFromMetadata(c *http.Client, metadata
 
 func (a *NebiusCloudMonitoring) getIAMTokenFromMetadata() (string, int, error) {
 	a.Log.Debugf("Getting new IAM token in %s", a.metadataTokenURL)
-	body, err := a.getResponseFromMetadata(a.client, a.metadataTokenURL)
+	body, err := getResponseFromMetadata(a.client, a.metadataTokenURL)
 	if err != nil {
 		return "", 0, err
 	}

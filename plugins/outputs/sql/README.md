@@ -1,18 +1,21 @@
 # SQL Output Plugin
 
-The SQL output plugin saves Telegraf metric data to an SQL database.
+This plugin writes metrics to a supported SQL database using a simple,
+hard-coded database schema. There is a table for each metric type with the
+table name corresponding to the metric name. There is a column per field
+and a column per tag with an optional column for the metric timestamp.
 
-The plugin uses a simple, hard-coded database schema. There is a table for each
-metric type and the table name is the metric name. There is a column per field
-and a column per tag. There is an optional column for the metric timestamp.
-
-A row is written for every input metric. This means multiple metrics are never
+A row is written for every metric. This means multiple metrics are never
 merged into a single row, even if they have the same metric name, tags, and
 timestamp.
 
 The plugin uses Golang's generic "database/sql" interface and third party
-drivers. See the driver-specific section below for a list of supported drivers
-and details. Additional drivers may be added in future Telegraf releases.
+drivers. See the driver-specific section for a list of supported drivers
+and details.
+
+⭐ Telegraf v1.19.0
+🏷️ datastore
+💻 all
 
 ## Getting started
 
@@ -37,7 +40,7 @@ driver selected.
 Through the nature of the inputs plugins, the amounts of columns inserted within
 rows for a given metric may differ. Since the tables are created based on the
 tags and fields available within an input metric, it's possible the created
-table won't contain all the neccessary columns. You might need to initialize
+table won't contain all the necessary columns. You might need to initialize
 the schema yourself, to avoid this scenario.
 
 ## Advanced options
@@ -184,11 +187,16 @@ docs](https://modernc.org/sqlite) for details.
 
 #### DSN
 
-Currently, Telegraf's sql output plugin depends on
-[clickhouse-go v1.5.4](https://github.com/ClickHouse/clickhouse-go/tree/v1.5.4)
-which uses a [different DSN
-format](https://github.com/ClickHouse/clickhouse-go/tree/v1.5.4#dsn) than its
-newer `v2.*` version.
+Note that even when the DSN is specified as `https://` the `secure=true`
+parameter is still required.
+
+The plugin now uses clickhouse-go v2. If you're still using a DSN compatible
+with v1 it will try to convert the DSN to the new format but as both schemata
+are not fully equivalent some parameters might not work anymore. Please check
+for warnings in your log file and refer to the
+[v2 DSN documentation][v2-dsn-docs] for available options.
+
+[v2-dsn-docs]: https://github.com/ClickHouse/clickhouse-go/tree/v2.30.2?tab=readme-ov-file#dsn
 
 #### Metric type to SQL type conversion
 

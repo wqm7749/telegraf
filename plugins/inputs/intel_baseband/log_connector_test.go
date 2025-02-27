@@ -4,7 +4,6 @@ package intel_baseband
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -241,11 +240,9 @@ func TestParseOperationName(t *testing.T) {
 		{"", ""},
 	}
 
-	logConnector := prepareLogConnMock()
-	require.NotNil(t, logConnector)
 	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("expected %s", tc.expected), func(t *testing.T) {
-			operationName := logConnector.parseOperationName(tc.input)
+		t.Run("expected "+tc.expected, func(t *testing.T) {
+			operationName := parseOperationName(tc.input)
 			require.Equal(t, tc.expected, operationName)
 		})
 	}

@@ -1,10 +1,13 @@
 package opensearch_query
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
-type BucketAggregationRequest map[string]*aggregationFunction
+type bucketAggregationRequest map[string]*aggregationFunction
 
-func (b BucketAggregationRequest) AddAggregation(name, aggType, field string) error {
+func (b bucketAggregationRequest) addAggregation(name, aggType, field string) error {
 	switch aggType {
 	case "terms":
 	default:
@@ -19,24 +22,24 @@ func (b BucketAggregationRequest) AddAggregation(name, aggType, field string) er
 	return nil
 }
 
-func (b BucketAggregationRequest) AddNestedAggregation(name string, a AggregationRequest) {
+func (b bucketAggregationRequest) addNestedAggregation(name string, a aggregationRequest) {
 	b[name].nested = a
 }
 
-func (b BucketAggregationRequest) BucketSize(name string, size int) error {
+func (b bucketAggregationRequest) bucketSize(name string, size int) error {
 	if size <= 0 {
-		return fmt.Errorf("invalid size; must be integer value > 0")
+		return errors.New("invalid size; must be integer value > 0")
 	}
 
 	if _, ok := b[name]; !ok {
 		return fmt.Errorf("aggregation %q not found", name)
 	}
 
-	b[name].Size(size)
+	b[name].setSize(size)
 
 	return nil
 }
 
-func (b BucketAggregationRequest) Missing(name, missing string) {
-	b[name].Missing(missing)
+func (b bucketAggregationRequest) missing(name, missing string) {
+	b[name].setMissing(missing)
 }

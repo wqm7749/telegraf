@@ -4,6 +4,7 @@ package execd
 import (
 	"bufio"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -13,7 +14,6 @@ import (
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal/process"
 	"github.com/influxdata/telegraf/plugins/outputs"
-	"github.com/influxdata/telegraf/plugins/serializers"
 )
 
 //go:embed sample.conf
@@ -28,20 +28,20 @@ type Execd struct {
 	Log                      telegraf.Logger
 
 	process    *process.Process
-	serializer serializers.Serializer
+	serializer telegraf.Serializer
 }
 
 func (*Execd) SampleConfig() string {
 	return sampleConfig
 }
 
-func (e *Execd) SetSerializer(s serializers.Serializer) {
+func (e *Execd) SetSerializer(s telegraf.Serializer) {
 	e.serializer = s
 }
 
 func (e *Execd) Init() error {
 	if len(e.Command) == 0 {
-		return fmt.Errorf("no command specified")
+		return errors.New("no command specified")
 	}
 
 	var err error

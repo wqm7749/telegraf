@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -17,14 +18,13 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
-	influxtls "github.com/influxdata/telegraf/plugins/common/tls"
+	common_tls "github.com/influxdata/telegraf/plugins/common/tls"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
 //go:embed sample.conf
 var sampleConfig string
 
-// OpensearchQuery struct
 type OpensearchQuery struct {
 	URLs                []string        `toml:"urls"`
 	Username            config.Secret   `toml:"username"`
@@ -36,11 +36,10 @@ type OpensearchQuery struct {
 
 	Log telegraf.Logger `toml:"-"`
 
-	influxtls.ClientConfig
+	common_tls.ClientConfig
 	osClient *opensearch.Client
 }
 
-// osAggregation struct
 type osAggregation struct {
 	Index             string          `toml:"index"`
 	MeasurementName   string          `toml:"measurement_name"`
@@ -55,17 +54,16 @@ type osAggregation struct {
 	MissingTagValue   string          `toml:"missing_tag_value"`
 	mapMetricFields   map[string]string
 
-	aggregation AggregationRequest
+	aggregation aggregationRequest
 }
 
 func (*OpensearchQuery) SampleConfig() string {
 	return sampleConfig
 }
 
-// Init the plugin.
 func (o *OpensearchQuery) Init() error {
 	if o.URLs == nil {
-		return fmt.Errorf("no urls defined")
+		return errors.New("no urls defined")
 	}
 
 	err := o.newClient()
@@ -75,10 +73,10 @@ func (o *OpensearchQuery) Init() error {
 
 	for i, agg := range o.Aggregations {
 		if agg.MeasurementName == "" {
-			return fmt.Errorf("field 'measurement_name' is not set")
+			return errors.New("field 'measurement_name' is not set")
 		}
 		if agg.DateField == "" {
-			return fmt.Errorf("field 'date_field' is not set")
+			return errors.New("field 'date_field' is not set")
 		}
 		err = o.initAggregation(agg, i)
 		if err != nil {
@@ -88,19 +86,21 @@ func (o *OpensearchQuery) Init() error {
 	return nil
 }
 
-func (o *OpensearchQuery) initAggregation(agg osAggregation, i int) (err error) {
-	for _, metricField := range agg.MetricFields {
-		if _, ok := agg.mapMetricFields[metricField]; !ok {
-			return fmt.Errorf("metric field %q not found on index %q", metricField, agg.Index)
-		}
+func (o *OpensearchQuery) Gather(acc telegraf.Accumulator) error {
+	var wg sync.WaitGroup
+
+	for _, agg := range o.Aggregations {
+		wg.Add(1)
+		go func(agg osAggregation) {
+			defer wg.Done()
+			err := o.osAggregationQuery(acc, agg)
+			if err != nil {
+				acc.AddError(fmt.Errorf("opensearch query aggregation %q: %w ", agg.MeasurementName, err))
+			}
+		}(agg)
 	}
 
-	err = agg.buildAggregationQuery()
-	if err != nil {
-		return fmt.Errorf("error building aggregation: %w", err)
-	}
-
-	o.Aggregations[i] = agg
+	wg.Wait()
 	return nil
 }
 
@@ -135,22 +135,19 @@ func (o *OpensearchQuery) newClient() error {
 	return err
 }
 
-// Gather writes the results of the queries from OpenSearch to the Accumulator.
-func (o *OpensearchQuery) Gather(acc telegraf.Accumulator) error {
-	var wg sync.WaitGroup
-
-	for _, agg := range o.Aggregations {
-		wg.Add(1)
-		go func(agg osAggregation) {
-			defer wg.Done()
-			err := o.osAggregationQuery(acc, agg)
-			if err != nil {
-				acc.AddError(fmt.Errorf("opensearch query aggregation %q: %w ", agg.MeasurementName, err))
-			}
-		}(agg)
+func (o *OpensearchQuery) initAggregation(agg osAggregation, i int) (err error) {
+	for _, metricField := range agg.MetricFields {
+		if _, ok := agg.mapMetricFields[metricField]; !ok {
+			return fmt.Errorf("metric field %q not found on index %q", metricField, agg.Index)
+		}
 	}
 
-	wg.Wait()
+	err = agg.buildAggregationQuery()
+	if err != nil {
+		return fmt.Errorf("error building aggregation: %w", err)
+	}
+
+	o.Aggregations[i] = agg
 	return nil
 }
 
@@ -163,19 +160,10 @@ func (o *OpensearchQuery) osAggregationQuery(acc telegraf.Accumulator, aggregati
 		return err
 	}
 
-	return searchResult.GetMetrics(acc, aggregation.MeasurementName)
+	return searchResult.getMetrics(acc, aggregation.MeasurementName)
 }
 
-func init() {
-	inputs.Add("opensearch_query", func() telegraf.Input {
-		return &OpensearchQuery{
-			Timeout:             config.Duration(time.Second * 5),
-			HealthCheckInterval: config.Duration(time.Second * 10),
-		}
-	})
-}
-
-func (o *OpensearchQuery) runAggregationQuery(ctx context.Context, aggregation osAggregation) (*AggregationResponse, error) {
+func (o *OpensearchQuery) runAggregationQuery(ctx context.Context, aggregation osAggregation) (*aggregationResponse, error) {
 	now := time.Now().UTC()
 	from := now.Add(time.Duration(-aggregation.QueryPeriod))
 	filterQuery := aggregation.FilterQuery
@@ -183,13 +171,13 @@ func (o *OpensearchQuery) runAggregationQuery(ctx context.Context, aggregation o
 		filterQuery = "*"
 	}
 
-	aq := &Query{
+	aq := &query{
 		Size:         0,
 		Aggregations: aggregation.aggregation,
 		Query:        nil,
 	}
 
-	boolQuery := &BoolQuery{
+	boolQuery := &boolQuery{
 		FilterQueryString: filterQuery,
 		TimestampField:    aggregation.DateField,
 		TimeRangeFrom:     from,
@@ -218,7 +206,7 @@ func (o *OpensearchQuery) runAggregationQuery(ctx context.Context, aggregation o
 	}
 	defer resp.Body.Close()
 
-	var searchResult AggregationResponse
+	var searchResult aggregationResponse
 
 	decoder := json.NewDecoder(resp.Body)
 	err = decoder.Decode(&searchResult)
@@ -230,8 +218,8 @@ func (o *OpensearchQuery) runAggregationQuery(ctx context.Context, aggregation o
 }
 
 func (aggregation *osAggregation) buildAggregationQuery() error {
-	var agg AggregationRequest
-	agg = &MetricAggregationRequest{}
+	var agg aggregationRequest
+	agg = &metricAggregationRequest{}
 
 	// create one aggregation per metric field found & function defined for numeric fields
 	for k, v := range aggregation.mapMetricFields {
@@ -241,7 +229,7 @@ func (aggregation *osAggregation) buildAggregationQuery() error {
 			continue
 		}
 
-		err := agg.AddAggregation(strings.ReplaceAll(k, ".", "_")+"_"+aggregation.MetricFunction, aggregation.MetricFunction, k)
+		err := agg.addAggregation(strings.ReplaceAll(k, ".", "_")+"_"+aggregation.MetricFunction, aggregation.MetricFunction, k)
 		if err != nil {
 			return err
 		}
@@ -249,18 +237,21 @@ func (aggregation *osAggregation) buildAggregationQuery() error {
 
 	// create a terms aggregation per tag
 	for _, term := range aggregation.Tags {
-		bucket := &BucketAggregationRequest{}
+		bucket := &bucketAggregationRequest{}
 		name := strings.ReplaceAll(term, ".", "_")
-		err := bucket.AddAggregation(name, "terms", term)
+		err := bucket.addAggregation(name, "terms", term)
 		if err != nil {
 			return err
 		}
-		_ = bucket.BucketSize(name, 1000)
+		err = bucket.bucketSize(name, 1000)
+		if err != nil {
+			return err
+		}
 		if aggregation.IncludeMissingTag && aggregation.MissingTagValue != "" {
-			bucket.Missing(name, aggregation.MissingTagValue)
+			bucket.missing(name, aggregation.MissingTagValue)
 		}
 
-		bucket.AddNestedAggregation(name, agg)
+		bucket.addNestedAggregation(name, agg)
 
 		agg = bucket
 	}
@@ -268,4 +259,13 @@ func (aggregation *osAggregation) buildAggregationQuery() error {
 	aggregation.aggregation = agg
 
 	return nil
+}
+
+func init() {
+	inputs.Add("opensearch_query", func() telegraf.Input {
+		return &OpensearchQuery{
+			Timeout:             config.Duration(time.Second * 5),
+			HealthCheckInterval: config.Duration(time.Second * 10),
+		}
+	})
 }

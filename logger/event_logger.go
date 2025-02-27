@@ -3,62 +3,76 @@
 package logger
 
 import (
-	"io"
+	"fmt"
 	"log"
-	"strings"
+	"os"
+	"time"
 
-	"github.com/influxdata/wlog"
 	"golang.org/x/sys/windows/svc/eventlog"
+
+	"github.com/influxdata/telegraf"
 )
 
 const (
-	LogTargetEventlog = "eventlog"
-	eidInfo           = 1
-	eidWarning        = 2
-	eidError          = 3
+	eidInfo    = 1
+	eidWarning = 2
+	eidError   = 3
 )
 
 type eventLogger struct {
-	logger *eventlog.Log
+	eventlog *eventlog.Log
+	errlog   *log.Logger
 }
 
-func (t *eventLogger) Write(b []byte) (int, error) {
-	var err error
-
-	loc := prefixRegex.FindIndex(b)
-	n := len(b)
-	if loc == nil {
-		err = t.logger.Info(1, string(b))
-	} else if n > 2 { //skip empty log messages
-		line := strings.Trim(string(b[loc[1]:]), " \t\r\n")
-		switch rune(b[loc[0]]) {
-		case 'I':
-			err = t.logger.Info(eidInfo, line)
-		case 'W':
-			err = t.logger.Warning(eidWarning, line)
-		case 'E':
-			err = t.logger.Error(eidError, line)
-		}
+func (l *eventLogger) Close() error {
+	if l.eventlog == nil {
+		return nil
 	}
-
-	return n, err
-}
-
-type eventLoggerCreator struct {
-	logger *eventlog.Log
-}
-
-func (e *eventLoggerCreator) CreateLogger(_ LogConfig) (io.Writer, error) {
-	return wlog.NewWriter(&eventLogger{logger: e.logger}), nil
-}
-
-func RegisterEventLogger(name string) error {
-	eventLog, err := eventlog.Open(name)
-	if err != nil {
-		log.Printf("E! An error occurred while initializing an event logger. %s", err)
+	if err := l.eventlog.Close(); err != nil {
 		return err
 	}
-
-	registerLogger(LogTargetEventlog, &eventLoggerCreator{logger: eventLog})
+	l.eventlog = nil
 	return nil
+}
+
+func (l *eventLogger) Print(level telegraf.LogLevel, _ time.Time, prefix string, _ map[string]interface{}, args ...interface{}) {
+	// Skip debug and beyond as they cannot be logged
+	if level >= telegraf.Debug {
+		return
+	}
+
+	msg := prefix + fmt.Sprint(args...)
+
+	var err error
+	switch level {
+	case telegraf.Error:
+		err = l.eventlog.Error(eidError, msg)
+	case telegraf.Warn:
+		err = l.eventlog.Warning(eidWarning, msg)
+	case telegraf.Info:
+		err = l.eventlog.Info(eidInfo, msg)
+	}
+	if err != nil {
+		l.errlog.Printf("E! Writing log message failed: %v", err)
+	}
+
+	// TODO attributes...
+}
+
+func createEventLogger(cfg *Config) (sink, error) {
+	eventLog, err := eventlog.Open(cfg.InstanceName)
+	if err != nil {
+		return nil, err
+	}
+
+	l := &eventLogger{
+		eventlog: eventLog,
+		errlog:   log.New(os.Stderr, "", 0),
+	}
+
+	return l, nil
+}
+
+func init() {
+	add("eventlog", createEventLogger)
 }

@@ -4,6 +4,7 @@ package stackdriver
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"path"
@@ -48,7 +49,7 @@ type Stackdriver struct {
 	counterCache    *counterCache
 	filterCounter   filter.Filter
 	filterGauge     filter.Filter
-	fitlerHistogram filter.Filter
+	filterHistogram filter.Filter
 }
 
 const (
@@ -99,7 +100,7 @@ func (s *Stackdriver) Init() error {
 	if err != nil {
 		return fmt.Errorf("creating gauge filter failed: %w", err)
 	}
-	s.fitlerHistogram, err = filter.Compile(s.MetricHistogram)
+	s.filterHistogram, err = filter.Compile(s.MetricHistogram)
 	if err != nil {
 		return fmt.Errorf("creating histogram filter failed: %w", err)
 	}
@@ -114,7 +115,7 @@ func (*Stackdriver) SampleConfig() string {
 // Connect initiates the primary connection to the GCP project.
 func (s *Stackdriver) Connect() error {
 	if s.Project == "" {
-		return fmt.Errorf("project is a required field for stackdriver output")
+		return errors.New("project is a required field for stackdriver output")
 	}
 
 	if s.Namespace == "" {
@@ -187,7 +188,7 @@ func (tsb timeSeriesBuckets) Add(m telegraf.Metric, f []*telegraf.Field, ts *mon
 // Split metrics up by timestamp and send to Google Cloud Stackdriver
 func (s *Stackdriver) Write(metrics []telegraf.Metric) error {
 	metricBatch := make(map[int64][]telegraf.Metric)
-	timestamps := []int64{}
+	timestamps := make([]int64, 0, len(metrics))
 	for _, metric := range sorted(metrics) {
 		timestamp := metric.Time().UnixNano()
 		if existingSlice, ok := metricBatch[timestamp]; ok {
@@ -226,7 +227,7 @@ func (s *Stackdriver) sendBatch(batch []telegraf.Metric) error {
 		if s.filterGauge != nil && s.filterGauge.Match(m.Name()) {
 			metricType = telegraf.Gauge
 		}
-		if s.fitlerHistogram != nil && s.fitlerHistogram.Match(m.Name()) {
+		if s.filterHistogram != nil && s.filterHistogram.Match(m.Name()) {
 			metricType = telegraf.Histogram
 		}
 
@@ -250,7 +251,7 @@ func (s *Stackdriver) sendBatch(batch []telegraf.Metric) error {
 		}
 
 		if m.Type() == telegraf.Histogram {
-			value, err := s.buildHistogram(m)
+			value, err := buildHistogram(m)
 			if err != nil {
 				s.Log.Errorf("Unable to build distribution from metric %s: %s", m, err)
 				continue
@@ -393,7 +394,7 @@ func (s *Stackdriver) sendBatch(batch []telegraf.Metric) error {
 
 		// Prepare time series request.
 		timeSeriesRequest := &monitoringpb.CreateTimeSeriesRequest{
-			Name:       fmt.Sprintf("projects/%s", s.Project),
+			Name:       "projects/" + s.Project,
 			TimeSeries: timeSeries,
 		}
 
@@ -461,7 +462,7 @@ func getStackdriverIntervalEndpoints(
 	m telegraf.Metric,
 	f *telegraf.Field,
 	cc *counterCache,
-) (*timestamppb.Timestamp, *timestamppb.Timestamp) {
+) (start, end *timestamppb.Timestamp) {
 	endTime := timestamppb.New(m.Time())
 	var startTime *timestamppb.Timestamp
 	if kind == metricpb.MetricDescriptor_CUMULATIVE {
@@ -473,11 +474,7 @@ func getStackdriverIntervalEndpoints(
 	return startTime, endTime
 }
 
-func getStackdriverTimeInterval(
-	m metricpb.MetricDescriptor_MetricKind,
-	startTime *timestamppb.Timestamp,
-	endTime *timestamppb.Timestamp,
-) (*monitoringpb.TimeInterval, error) {
+func getStackdriverTimeInterval(m metricpb.MetricDescriptor_MetricKind, startTime, endTime *timestamppb.Timestamp) (*monitoringpb.TimeInterval, error) {
 	switch m {
 	case metricpb.MetricDescriptor_GAUGE:
 		return &monitoringpb.TimeInterval{
@@ -566,10 +563,10 @@ func (s *Stackdriver) getStackdriverTypedValue(value interface{}) (*monitoringpb
 	}
 }
 
-func (s *Stackdriver) buildHistogram(m telegraf.Metric) (*monitoringpb.TypedValue, error) {
+func buildHistogram(m telegraf.Metric) (*monitoringpb.TypedValue, error) {
 	sumInter, ok := m.GetField("sum")
 	if !ok {
-		return nil, fmt.Errorf("no sum field present")
+		return nil, errors.New("no sum field present")
 	}
 	sum, err := internal.ToFloat64(sumInter)
 	if err != nil {
@@ -579,7 +576,7 @@ func (s *Stackdriver) buildHistogram(m telegraf.Metric) (*monitoringpb.TypedValu
 
 	countInter, ok := m.GetField("count")
 	if !ok {
-		return nil, fmt.Errorf("no count field present")
+		return nil, errors.New("no count field present")
 	}
 	count, err := internal.ToFloat64(countInter)
 	if err != nil {

@@ -4,7 +4,7 @@ package cloud_pubsub_push
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +18,7 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/agent"
 	"github.com/influxdata/telegraf/config"
+	"github.com/influxdata/telegraf/logger"
 	"github.com/influxdata/telegraf/models"
 	"github.com/influxdata/telegraf/plugins/parsers/influx"
 	"github.com/influxdata/telegraf/testutil"
@@ -195,6 +196,7 @@ func TestServeHTTP(t *testing.T) {
 			for m := range d {
 				ro.AddMetric(m)
 				ro.Write() //nolint:errcheck // test will fail anyway if the write fails
+				m.Accept()
 			}
 		}(dst)
 
@@ -217,7 +219,7 @@ func TestServeHTTP(t *testing.T) {
 
 type testMetricMaker struct{}
 
-func (tm *testMetricMaker) Name() string {
+func (*testMetricMaker) Name() string {
 	return "TestPlugin"
 }
 
@@ -225,12 +227,12 @@ func (tm *testMetricMaker) LogName() string {
 	return tm.Name()
 }
 
-func (tm *testMetricMaker) MakeMetric(metric telegraf.Metric) telegraf.Metric {
+func (*testMetricMaker) MakeMetric(metric telegraf.Metric) telegraf.Metric {
 	return metric
 }
 
-func (tm *testMetricMaker) Log() telegraf.Logger {
-	return models.NewLogger("test", "test", "")
+func (*testMetricMaker) Log() telegraf.Logger {
+	return logger.New("test", "test", "")
 }
 
 type testOutput struct {
@@ -256,7 +258,7 @@ func (*testOutput) SampleConfig() string {
 
 func (t *testOutput) Write(_ []telegraf.Metric) error {
 	if t.failWrite {
-		return fmt.Errorf("failed write")
+		return errors.New("failed write")
 	}
 	return nil
 }

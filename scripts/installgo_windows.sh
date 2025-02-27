@@ -2,15 +2,15 @@
 
 set -eux
 
-GO_VERSION="1.21.5"
+GO_VERSION="1.24.0"
 
 setup_go () {
-    choco upgrade golang --allow-downgrade --force --version=${GO_VERSION}
-    git config --system core.longpaths true
+    choco upgrade golang --allow-downgrade --version=${GO_VERSION}
 }
 
 if command -v go >/dev/null 2>&1; then
     echo "Go is already installed"
+    cd
     v=$(go version | { read -r _ _ v _; echo "${v#go}"; })
     echo "$v is installed, required version is ${GO_VERSION}"
     if [ "$v" != ${GO_VERSION} ]; then

@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,12 +15,14 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
-	httpcommon "github.com/influxdata/telegraf/plugins/common/http"
+	common_http "github.com/influxdata/telegraf/plugins/common/http"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
 //go:embed sample.conf
 var sampleConfig string
+
+const timeLayout = "2006-01-02 15:04:05 -0700 MST"
 
 // Vault configuration object
 type Vault struct {
@@ -27,12 +30,10 @@ type Vault struct {
 	TokenFile string          `toml:"token_file"`
 	Token     string          `toml:"token"`
 	Log       telegraf.Logger `toml:"-"`
-	httpcommon.HTTPClientConfig
+	common_http.HTTPClientConfig
 
 	client *http.Client
 }
-
-const timeLayout = "2006-01-02 15:04:05 -0700 MST"
 
 func (*Vault) SampleConfig() string {
 	return sampleConfig
@@ -44,11 +45,11 @@ func (n *Vault) Init() error {
 	}
 
 	if n.TokenFile == "" && n.Token == "" {
-		return fmt.Errorf("token missing")
+		return errors.New("token missing")
 	}
 
 	if n.TokenFile != "" && n.Token != "" {
-		return fmt.Errorf("both token_file and token are set")
+		return errors.New("both token_file and token are set")
 	}
 
 	if n.TokenFile != "" {
@@ -69,7 +70,11 @@ func (n *Vault) Init() error {
 	return nil
 }
 
-// Gather, collects metrics from Vault endpoint
+func (*Vault) Start(telegraf.Accumulator) error {
+	return nil
+}
+
+// Gather collects metrics from Vault endpoint
 func (n *Vault) Gather(acc telegraf.Accumulator) error {
 	sysMetrics, err := n.loadJSON(n.URL + "/v1/sys/metrics")
 	if err != nil {
@@ -79,7 +84,13 @@ func (n *Vault) Gather(acc telegraf.Accumulator) error {
 	return buildVaultMetrics(acc, sysMetrics)
 }
 
-func (n *Vault) loadJSON(url string) (*SysMetrics, error) {
+func (n *Vault) Stop() {
+	if n.client != nil {
+		n.client.CloseIdleConnections()
+	}
+}
+
+func (n *Vault) loadJSON(url string) (*sysMetrics, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -98,7 +109,7 @@ func (n *Vault) loadJSON(url string) (*SysMetrics, error) {
 		return nil, fmt.Errorf("%s returned HTTP status %s", url, resp.Status)
 	}
 
-	var metrics SysMetrics
+	var metrics sysMetrics
 	err = json.NewDecoder(resp.Body).Decode(&metrics)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing json response: %w", err)
@@ -108,7 +119,7 @@ func (n *Vault) loadJSON(url string) (*SysMetrics, error) {
 }
 
 // buildVaultMetrics, it builds all the metrics and adds them to the accumulator
-func buildVaultMetrics(acc telegraf.Accumulator, sysMetrics *SysMetrics) error {
+func buildVaultMetrics(acc telegraf.Accumulator, sysMetrics *sysMetrics) error {
 	t, err := internal.ParseTimestamp(timeLayout, sysMetrics.Timestamp, nil)
 	if err != nil {
 		return fmt.Errorf("error parsing time: %w", err)
@@ -181,7 +192,7 @@ func buildVaultMetrics(acc telegraf.Accumulator, sysMetrics *SysMetrics) error {
 func init() {
 	inputs.Add("vault", func() telegraf.Input {
 		return &Vault{
-			HTTPClientConfig: httpcommon.HTTPClientConfig{
+			HTTPClientConfig: common_http.HTTPClientConfig{
 				ResponseHeaderTimeout: config.Duration(5 * time.Second),
 			},
 		}
