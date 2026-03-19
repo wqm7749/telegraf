@@ -244,3 +244,39 @@ func TestTableJoinNoIndexAsTag_walk(t *testing.T) {
 	require.Contains(t, tb.Rows, rtr2)
 	require.Contains(t, tb.Rows, rtr3)
 }
+
+func TestTableBuild_walk_duplicateIndex(t *testing.T) {
+	// Two values that differ only after the first index component should result in
+	// the same truncated index when OidIndexLength is used.
+	conn := &testSNMPConnection{
+		host: "localhost",
+		values: map[string]interface{}{
+			".1.0.0.0.1.1.0.0": 0,
+			".1.0.0.0.1.1.0.1": 1,
+			".1.0.0.0.1.2.0":   2,
+		},
+	}
+
+	tbl := Table{
+		Name:       "mytable",
+		IndexAsTag: true,
+		Fields: []Field{
+			{
+				Name:           "myfield1",
+				Oid:            ".1.0.0.0.1.1",
+				OidIndexLength: 1,
+			},
+			{
+				Name: "myfield2",
+				Oid:  ".1.0.0.0.1.2",
+			},
+		},
+	}
+
+	tb, err := tbl.Build(conn, true)
+	require.NoError(t, err)
+	require.Len(t, tb.Rows, 1)
+	require.Equal(t, "0", tb.Rows[0].Tags["index"])
+	require.Contains(t, tb.Rows[0].Fields, "myfield1")
+	require.Contains(t, tb.Rows[0].Fields, "myfield2")
+}
