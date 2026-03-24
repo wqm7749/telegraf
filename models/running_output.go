@@ -76,7 +76,7 @@ type RunningOutput struct {
 	aggMutex sync.Mutex
 }
 
-func NewRunningOutput(output telegraf.Output, config *OutputConfig, batchSize, bufferLimit int) *RunningOutput {
+func NewRunningOutput(output telegraf.Output, config *OutputConfig, batchSize, bufferLimit int) (*RunningOutput, error) {
 	tags := map[string]string{
 		"output": config.Name,
 		"_id":    config.ID,
@@ -111,7 +111,7 @@ func NewRunningOutput(output telegraf.Output, config *OutputConfig, batchSize, b
 
 	b, err := NewBuffer(config.Name, config.ID, config.Alias, bufferLimit, config.BufferStrategy, config.BufferDirectory, config.BufferDiskSync)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("creating buffer failed: %w", err)
 	}
 
 	ro := &RunningOutput{
@@ -144,7 +144,7 @@ func NewRunningOutput(output telegraf.Output, config *OutputConfig, batchSize, b
 		log: logger,
 	}
 
-	return ro
+	return ro, nil
 }
 
 func (r *RunningOutput) LogName() string {
