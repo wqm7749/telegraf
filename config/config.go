@@ -640,6 +640,9 @@ func (c *Config) LoadConfigData(data []byte, path string) error {
 		if err = c.toml.UnmarshalTable(subTable, c.Agent); err != nil {
 			return fmt.Errorf("error parsing [agent]: %w", err)
 		}
+		if c.Agent.CollectionOffset < 0 {
+			return fmt.Errorf("agent collection_offset must not be negative, found %v", c.Agent.CollectionOffset)
+		}
 	}
 
 	if !c.Agent.OmitHostname {
@@ -1692,6 +1695,9 @@ func (c *Config) buildInput(name, source string, tbl *ast.Table) (*models.InputC
 	cp.Precision, _ = c.getFieldDuration(tbl, "precision")
 	cp.CollectionJitter, _ = c.getFieldDuration(tbl, "collection_jitter")
 	cp.CollectionOffset, _ = c.getFieldDuration(tbl, "collection_offset")
+	if cp.CollectionOffset < 0 {
+		return nil, fmt.Errorf("negative collection_offset %q is not allowed", cp.CollectionOffset)
+	}
 	cp.StartupErrorBehavior = c.getFieldString(tbl, "startup_error_behavior")
 	cp.TimeSource = c.getFieldString(tbl, "time_source")
 
